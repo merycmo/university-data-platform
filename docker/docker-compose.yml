@@ -1,33 +1,28 @@
 version: '3.8'
-
 services:
-  # Stockage objet compatible S3 (Zone Raw)
   minio:
     image: minio/minio
     container_name: university_minio
-    ports:
-      - "9000:9000"    # API
-      - "9001:9001"    # Interface Web (Console)
+    ports: ["9000:9000", "9001:9001"]
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: password123
     command: server /data --console-address ":9001"
-    volumes:
-      - ./data/minio:/data
 
-  # Moteur de recherche (Search & Observability)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.17.10
     container_name: university_es
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - ./data/elasticsearch:/usr/share/elasticsearch/data
+    ports: ["9200:9200"]
 
-networks:
-  default:
-    name: university-network
+  metabase:
+    image: metabase/metabase:latest
+    container_name: university_metabase
+    ports: ["3000:3000"]
+    depends_on:
+      - elasticsearch
+
+  # Note: Hive Metastore demande souvent une base SQL (Postgres/MySQL) 
+  # Pour le jour 1, ces 3 services sont la priorité absolue.
