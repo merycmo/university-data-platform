@@ -91,7 +91,7 @@ def fetch_openalex_authors(university_name, faculty_name, max_results=100):
             response = requests.get(
                 "https://api.openalex.org/authors",
                 params={
-                    "filter"   : f"last_known_institution.display_name.search:{university_name}",
+                    "search"   : university_name,
                     "per_page" : per_page,
                     "page"     : page,
                     "mailto"   : "university@ma.ma"
@@ -101,6 +101,7 @@ def fetch_openalex_authors(university_name, faculty_name, max_results=100):
 
             if response.status_code != 200:
                 logger.warning(f"⚠️ Erreur {response.status_code}")
+                logger.warning(f"⚠️ Réponse : {response.text[:200]}")
                 break
 
             data    = response.json()
@@ -126,7 +127,9 @@ def fetch_openalex_authors(university_name, faculty_name, max_results=100):
                     "fetched_at"         : datetime.now().isoformat()
                 })
 
+            logger.info(f"📄 Page {page} → {len(results)} auteurs")
             page += 1
+
             if len(results) < per_page:
                 break
 
@@ -153,7 +156,7 @@ def fetch_openalex_publications(university_name, faculty_name, max_results=200):
             response = requests.get(
                 "https://api.openalex.org/works",
                 params={
-                    "filter"   : f"institutions.display_name.search:{university_name}",
+                    "filter"   : f"authorships.institutions.display_name.search:{university_name}",
                     "per_page" : per_page,
                     "page"     : page,
                     "mailto"   : "university@ma.ma"
@@ -163,6 +166,7 @@ def fetch_openalex_publications(university_name, faculty_name, max_results=200):
 
             if response.status_code != 200:
                 logger.warning(f"⚠️ Erreur {response.status_code}")
+                logger.warning(f"⚠️ Réponse : {response.text[:200]}")
                 break
 
             data    = response.json()
@@ -193,7 +197,9 @@ def fetch_openalex_publications(university_name, faculty_name, max_results=200):
                     "fetched_at"      : datetime.now().isoformat()
                 })
 
+            logger.info(f"📄 Page {page} → {len(results)} publications")
             page += 1
+
             if len(results) < per_page:
                 break
 
@@ -213,6 +219,7 @@ def fetch_openalex(university_name, faculty_name):
 
     client = get_minio_client()
 
+    # Auteurs
     authors = fetch_openalex_authors(university_name, faculty_name)
     if authors:
         save_json_to_minio(
@@ -223,6 +230,7 @@ def fetch_openalex(university_name, faculty_name):
             source     = "openalex_authors"
         )
 
+    # Publications
     publications = fetch_openalex_publications(university_name, faculty_name)
     if publications:
         save_json_to_minio(
