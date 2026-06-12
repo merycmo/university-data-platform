@@ -135,8 +135,8 @@ def extract_links(html_content, base_url, allowed_domain):
 # ─────────────────────────────────────────
 def fetch_page_with_playwright(page, url):
     try:
-        page.goto(url, timeout=15000, wait_until="networkidle")
-        time.sleep(2)  # Attendre JS
+        page.goto(url, timeout=30000, wait_until="networkidle")
+        time.sleep(5)  # Attendre que JS charge complètement
         content = page.content()
         return content.encode("utf-8")
     except Exception as e:
@@ -183,14 +183,12 @@ def scrape_university(start_url, university, faculty, max_depth=3):
                 continue
 
             try:
-                # Télécharger avec Playwright
                 content = fetch_page_with_playwright(page, url)
 
                 if not content:
                     stats["errors"] += 1
                     continue
 
-                # Sauvegarder dans MinIO
                 save_to_minio(
                     client     = client,
                     content    = content,
@@ -203,7 +201,6 @@ def scrape_university(start_url, university, faculty, max_depth=3):
 
                 stats[file_type if file_type in stats else "html"] += 1
 
-                # Si HTML → extraire les liens
                 if file_type == "html" and depth < max_depth:
                     links = extract_links(
                         html_content   = content,
