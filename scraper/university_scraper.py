@@ -40,12 +40,17 @@ def get_minio_client():
 # ─────────────────────────────────────────
 def get_file_type(url):
     url_lower = url.lower()
-    if url_lower.endswith(".pdf"):
+    # Nettoyer les paramètres de l'URL
+    url_clean = url_lower.split("?")[0].split("#")[0]
+
+    if url_clean.endswith(".pdf"):
         return "pdf"
-    elif url_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+    elif url_clean.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")):
         return "image"
-    elif url_lower.endswith((".json", ".csv")):
+    elif url_clean.endswith((".json", ".csv")):
         return "json"
+    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".eot")):
+        return "skip"
     else:
         return "html"
 
@@ -120,20 +125,35 @@ def extract_links(html_content, base_url, allowed_domain):
     soup  = BeautifulSoup(html_content, "html.parser")
     links = set()
 
-    for tag in soup.find_all(["a", "link"]):
+    for tag in soup.find_all(["a"]):
         href = tag.get("href")
         if not href:
             continue
 
+        # Ignorer les ancres et javascript
+        if href.startswith("#"):
+            continue
+        if href.startswith("javascript"):
+            continue
+        if href.startswith("mailto"):
+            continue
+        if href.startswith("tel"):
+            continue
+
+        # Construire l'URL absolue
         full_url = urljoin(base_url, href)
 
-        if urlparse(full_url).netloc != allowed_domain:
+        # Rester sur le même domaine
+        parsed = urlparse(full_url)
+        if parsed.netloc != allowed_domain:
             continue
 
-        if href.startswith("#") or href.startswith("javascript"):
-            continue
+        # Nettoyer l'URL
+        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        if parsed.query:
+            clean_url += f"?{parsed.query}"
 
-        links.add(full_url)
+        links.add(clean_url)
 
     return links
 
@@ -155,26 +175,37 @@ def scrape_university(start_url, university, faculty, max_depth=3):
         "pdf"    : 0,
         "image"  : 0,
         "json"   : 0,
+        "skip"   : 0,
         "errors" : 0
     }
 
     while queue:
         url, depth = queue.pop(0)
 
+        # STOP si déjà visité
         if url in visited:
             continue
 
+        # STOP si niveau > max_depth
         if depth > max_depth:
             continue
 
         visited.add(url)
         file_type = get_file_type(url)
 
+        # Ignorer CSS JS ICO etc
+        if file_type == "skip":
+            stats["skip"] += 1
+            logger.info(f"⏭️ Ignoré : {url}")
+            continue
+
         try:
             response = requests.get(
                 url,
                 timeout=10,
-                headers={"User-Agent": "UniversityBot/1.0"}
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; UniversityBot/1.0)"
+                }
             )
 
             if response.status_code != 200:
@@ -182,8 +213,16 @@ def scrape_university(start_url, university, faculty, max_depth=3):
                 stats["errors"] += 1
                 continue
 
+            # Vérifier le content-type
+            content_type = response.headers.get("Content-Type", "")
+            if "text/html" not in content_type and file_type == "html":
+                logger.info(f"⏭️ Pas HTML ({content_type}) : {url}")
+                stats["skip"] += 1
+                continue
+
             content = response.content
 
+            # Sauvegarder dans MinIO
             save_to_minio(
                 client     = client,
                 content    = content,
@@ -194,12 +233,9 @@ def scrape_university(start_url, university, faculty, max_depth=3):
                 depth      = depth
             )
 
-            if file_type in stats:
-                stats[file_type] += 1
-            else:
-                stats["html"] += 1
+            stats[file_type] += 1
 
-            # Si HTML → extraire liens et continuer
+            # Si HTML → extraire les liens et continuer
             if file_type == "html" and depth < max_depth:
                 links = extract_links(
                     html_content   = content,
@@ -209,24 +245,28 @@ def scrape_university(start_url, university, faculty, max_depth=3):
                 for link in links:
                     if link not in visited:
                         queue.append((link, depth + 1))
+                logger.info(f"🔗 {len(links)} liens trouvés sur {url}")
 
         except Exception as e:
             logger.error(f"❌ Erreur sur {url} : {e}")
             stats["errors"] += 1
 
+        # Délai entre requêtes
         time.sleep(0.5)
 
     logger.info(f"""
     ✅ Scraping terminé pour {faculty}
-    ─────────────────────────────
+    ─────────────────────────────────
     HTML collectés  : {stats['html']}
     PDFs collectés  : {stats['pdf']}
     Images          : {stats['image']}
+    Ignorés         : {stats['skip']}
     Erreurs         : {stats['errors']}
     Total visités   : {len(visited)}
     """)
 
     return stats
+
 
 # ─────────────────────────────────────────
 # TEST DIRECT
