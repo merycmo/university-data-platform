@@ -156,7 +156,7 @@ def fetch_openalex_publications(university_name, faculty_name, max_results=200):
             response = requests.get(
                 "https://api.openalex.org/works",
                 params={
-                    "filter"   : f"authorships.institutions.display_name.search:{university_name}",
+                    "search"   : f"{university_name} Casablanca",
                     "per_page" : per_page,
                     "page"     : page,
                     "mailto"   : "university@ma.ma"
