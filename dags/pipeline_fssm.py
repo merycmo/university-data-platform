@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, '/opt/airflow')
 sys.path.insert(0, '/opt/airflow/dags')
 sys.path.insert(0, '/')
-from scraper.university_scraper import scrape_university
+from university_scraper import scrape_university
 from ingestion.ingest_api import fetch_openalex
 
 default_args = {
