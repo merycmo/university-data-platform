@@ -1,0 +1,32 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "analysis": {
+      "analyzer": {
+        "arabic_analyzer": {
+          "type": "arabic"
+        },
+        "french_analyzer": {
+          "type": "french"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "record_id"        : { "type": "keyword" },
+      "title"            : { "type": "text", "analyzer": "french" },
+      "content"          : { "type": "text", "analyzer": "french" },
+      "university"       : { "type": "keyword" },
+      "faculty"          : { "type": "keyword" },
+      "file_type"        : { "type": "keyword" },
+      "language"         : { "type": "keyword" },
+      "source_url"       : { "type": "keyword" },
+      "depth_level"      : { "type": "integer" },
+      "crawl_timestamp"  : { "type": "date" },
+      "content_checksum" : { "type": "keyword" },
+      "storage_path"     : { "type": "keyword" }
+    }
+  }
+}

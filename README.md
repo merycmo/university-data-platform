@@ -24,5 +24,5 @@ Ce projet vise à construire une plateforme de données universitaire complète 
 ### Lancement de l'infrastructure
 1. Clonez le dépôt :
    ```bash
-   git clone [https://github.com/](https://github.com/)[TON_NOM]/university-data-platform.git
+   git clone https://github.com/merycmo/university-data-platform.git
    cd university-data-platform

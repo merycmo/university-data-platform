@@ -1,87 +1,140 @@
-import os
-import time
+# ingestion/ingest_file.py
+
+import hashlib
 import json
-import requests
-from datetime import datetime, UTC
-from boto3 import session
-from botocore.exceptions import ClientError
+import logging
+from datetime import datetime
+from io import BytesIO
+from minio import Minio
+import PyPDF2
 
-# 1. LIEN STABLE DE SECOURS (Contient les données éducatives officielles du Maroc)
-DATA_URL = "https://raw.githubusercontent.com/datasets/population/master/data/population.csv"
-LOCAL_FILE_PATH = "ingestion/maroc_universities.csv" 
-TARGET_FILE_NAME = f"maroc_education_{int(time.time())}.csv"
+# ─────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────
+MINIO_HOST     = "localhost:9000"
+MINIO_USER     = "admin"
+MINIO_PASSWORD = "password123"
 
-# 2. CONFIGURATION MINIO (Identique à ton docker-compose)
-MINIO_ENDPOINT = "http://localhost:9000"
-ACCESS_KEY = "admin"
-SECRET_KEY = "password123"
-BUCKET_NAME = "raw-documents"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Connexion au client MinIO (Docker)
-s3_client = session.Session().client(
-    service_name="s3",
-    aws_access_key_id=ACCESS_KEY,
-    aws_secret_access_key=SECRET_KEY,
-    endpoint_url=MINIO_ENDPOINT
-)
+# ─────────────────────────────────────────
+# Connexion MinIO
+# ─────────────────────────────────────────
+def get_minio_client():
+    return Minio(
+        MINIO_HOST,
+        access_key=MINIO_USER,
+        secret_key=MINIO_PASSWORD,
+        secure=False
+    )
 
-def run_file_ingestion():
-    # Étape 1 : Téléchargement du fichier avec un User-Agent pour éviter d'être bloqué
-    print("Téléchargement du jeu de données Éducation...")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
+# ─────────────────────────────────────────
+# Extraire le texte d'un PDF
+# ─────────────────────────────────────────
+def extract_pdf_text(pdf_content):
     try:
-        response = requests.get(DATA_URL, headers=headers, timeout=15)
-        if response.status_code == 200:
-            os.makedirs(os.path.dirname(LOCAL_FILE_PATH), exist_ok=True)
-            with open(LOCAL_FILE_PATH, "wb") as f:
-                f.write(response.content)
-            print(f"✅ Fichier enregistré localement dans : {LOCAL_FILE_PATH}")
-        else:
-            print(f"❌ Erreur de récupération. Statut : {response.status_code}")
-            return
+        reader = PyPDF2.PdfReader(BytesIO(pdf_content))
+        text   = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        return text.strip()
     except Exception as e:
-        print(f"❌ Erreur de connexion au serveur : {e}")
-        return
+        logger.error(f"❌ Erreur extraction PDF : {e}")
+        return ""
 
-    # Étape 2 : Vérification et création du bucket raw-documents s'il n'existe pas
-    try:
-        s3_client.head_bucket(Bucket=BUCKET_NAME)
-    except ClientError:
-        print(f"Le bucket '{BUCKET_NAME}' n'existe pas. Création automatique...")
-        s3_client.create_bucket(Bucket=BUCKET_NAME)
+# ─────────────────────────────────────────
+# Traiter les PDFs depuis MinIO
+# ─────────────────────────────────────────
+def process_pdfs(university, faculty):
 
-    # Étape 3 : Téléversement du fichier et des métadonnées vers MinIO
-    try:
-        print(f"Téléversement de {LOCAL_FILE_PATH} vers Docker MinIO...")
-        s3_client.upload_file(
-            Filename=LOCAL_FILE_PATH,
-            Bucket=BUCKET_NAME,
-            Key=TARGET_FILE_NAME
-        )
+    logger.info(f"🚀 Traitement PDFs : {faculty} — {university}")
 
-        # Structure de métadonnées exigée par ton projet
-        metadata = {
-            "extracted_at": datetime.now(UTC).isoformat(),
-            "source": "Portail National des Données Ouvertes (data.gov.ma) - Thème: Education",
-            "original_file_name": os.path.basename(LOCAL_FILE_PATH),
-            "file_size_bytes": os.path.getsize(LOCAL_FILE_PATH)
-        }
-        
-        # Envoi du fichier JSON de métadonnées associé
-        metadata_file_key = TARGET_FILE_NAME.replace(".csv", "_metadata.json")
-        s3_client.put_object(
-            Bucket=BUCKET_NAME,
-            Key=metadata_file_key,
-            Body=json.dumps(metadata, indent=4),
-            ContentType="application/json"
-        )
+    client   = get_minio_client()
+    prefix   = f"university={university}/faculty={faculty}/"
+    objects  = client.list_objects(
+        "raw-documents",
+        prefix    = prefix,
+        recursive = True
+    )
 
-        print("🎉 Ingestion du fichier et de ses métadonnées réussie avec succès dans MinIO !")
+    processed = 0
+    errors    = 0
 
-    except Exception as e:
-        print(f"❌ Échec de l'envoi vers MinIO : {e}")
+    for obj in objects:
 
+        if not obj.object_name.endswith(".pdf"):
+            continue
+
+        try:
+            # Lire le PDF depuis MinIO
+            response    = client.get_object("raw-documents", obj.object_name)
+            pdf_content = response.read()
+
+            # Extraire le texte
+            text = extract_pdf_text(pdf_content)
+
+            if not text:
+                logger.warning(f"⚠️ PDF vide : {obj.object_name}")
+                continue
+
+            # Créer le document enrichi
+            now      = datetime.now()
+            checksum = hashlib.md5(pdf_content).hexdigest()
+
+            enriched = {
+                "source_path"      : obj.object_name,
+                "university"       : university,
+                "faculty"          : faculty,
+                "file_type"        : "pdf",
+                "extracted_text"   : text[:50000],
+                "text_length"      : len(text),
+                "content_checksum" : checksum,
+                "processed_at"     : now.isoformat()
+            }
+
+            # Sauvegarder le texte extrait dans raw-json
+            enriched_content = json.dumps(
+                enriched,
+                ensure_ascii=False
+            ).encode("utf-8")
+
+            output_path = (
+                f"university={university}/"
+                f"faculty={faculty}/"
+                f"year={now.year}/month={now.month:02d}/"
+                f"pdf_extracted_{checksum[:8]}.json"
+            )
+
+            client.put_object(
+                bucket_name  = "raw-json",
+                object_name  = output_path,
+                data         = BytesIO(enriched_content),
+                length       = len(enriched_content),
+                content_type = "application/json"
+            )
+
+            logger.info(f"✅ PDF traité : {obj.object_name}")
+            processed += 1
+
+        except Exception as e:
+            logger.error(f"❌ Erreur PDF {obj.object_name} : {e}")
+            errors += 1
+
+    logger.info(f"""
+    ✅ Traitement PDFs terminé pour {faculty}
+    ─────────────────────────────────────────
+    PDFs traités : {processed}
+    Erreurs      : {errors}
+    """)
+
+    return {"processed": processed, "errors": errors}
+
+# ─────────────────────────────────────────
+# TEST DIRECT
+# ─────────────────────────────────────────
 if __name__ == "__main__":
-    run_file_ingestion()
+    process_pdfs(
+        university = "hassan2",
+        faculty    = "FSAC"
+    )
