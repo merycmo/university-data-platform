@@ -27,7 +27,7 @@ def scrape_fstg():
     stats = scrape_university(
         start_url  = "https://www.fstg-marrakech.ac.ma/",
         university = "cadi_ayyad",
-        faculty    = "fstg",
+        faculty    = "FSTG",
         max_depth  = 3
     )
     print(f"HTML      : {stats['html']}")
