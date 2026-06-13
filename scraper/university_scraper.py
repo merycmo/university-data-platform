@@ -4,15 +4,13 @@ import hashlib
 import json
 import time
 import logging
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from minio import Minio
 from io import BytesIO
-from playwright.sync_api import sync_playwright
 
-# ─────────────────────────────────────────
-# Configuration MinIO
-# ─────────────────────────────────────────
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -20,9 +18,8 @@ MINIO_PASSWORD = "password123"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────
-# Connexion MinIO
-# ─────────────────────────────────────────
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; UniversityBot/1.0)"}
+
 def get_minio_client():
     return Minio(
         MINIO_HOST,
@@ -31,9 +28,6 @@ def get_minio_client():
         secure=False
     )
 
-# ─────────────────────────────────────────
-# Détecter le type de fichier
-# ─────────────────────────────────────────
 def get_file_type(url):
     url_clean = url.lower().split("?")[0].split("#")[0]
     if url_clean.endswith(".pdf"):
@@ -42,14 +36,11 @@ def get_file_type(url):
         return "image"
     elif url_clean.endswith((".json", ".csv")):
         return "json"
-    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf")):
+    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".doc", ".docx")):
         return "skip"
     else:
-        return "html"
+        return "html"  # .html ET .php → traités comme HTML
 
-# ─────────────────────────────────────────
-# Détecter le bucket
-# ─────────────────────────────────────────
 def get_bucket(file_type):
     return {
         "html"  : "raw-web-html",
@@ -58,9 +49,6 @@ def get_bucket(file_type):
         "json"  : "raw-json"
     }.get(file_type, "raw-web-html")
 
-# ─────────────────────────────────────────
-# Sauvegarder dans MinIO
-# ─────────────────────────────────────────
 def save_to_minio(client, content, url, university, faculty, file_type, depth):
     now         = datetime.now()
     filename    = hashlib.md5(url.encode()).hexdigest() + "." + file_type
@@ -104,11 +92,7 @@ def save_to_minio(client, content, url, university, faculty, file_type, depth):
     logger.info(f"✅ Sauvegardé : {url} → {bucket}/{object_path}")
     return metadata
 
-# ─────────────────────────────────────────
-# Extraire les liens depuis le HTML
-# ─────────────────────────────────────────
 def extract_links(html_content, base_url, allowed_domain):
-    from bs4 import BeautifulSoup
     soup  = BeautifulSoup(html_content, "html.parser")
     links = set()
 
@@ -126,26 +110,66 @@ def extract_links(html_content, base_url, allowed_domain):
             continue
 
         clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        if parsed.query:
+            clean_url += f"?{parsed.query}"
         links.add(clean_url)
 
     return links
 
-# ─────────────────────────────────────────
-# Télécharger une page avec Playwright
-# ─────────────────────────────────────────
-def fetch_page_with_playwright(page, url):
+def is_dynamic_site(html_content):
+    dynamic_indicators = [
+        "callWS", "getTabs", "getPage",
+        "angular", "react", "vue",
+        "$(document).ready"
+    ]
+    for indicator in dynamic_indicators:
+        if indicator in html_content:
+            return True
+    return False
+
+def fetch_with_requests(url):
     try:
-        page.goto(url, timeout=30000, wait_until="networkidle")
-        time.sleep(5)  # Attendre que JS charge complètement
-        content = page.content()
-        return content.encode("utf-8")
+        response = requests.get(url, timeout=15, headers=HEADERS)
+        if response.status_code == 200:
+            return response.content
+        logger.warning(f"⚠️ Erreur {response.status_code} : {url}")
+        return None
     except Exception as e:
-        logger.error(f"❌ Playwright erreur sur {url} : {e}")
+        logger.error(f"❌ Erreur requests {url} : {e}")
         return None
 
-# ─────────────────────────────────────────
-# SCRAPER PRINCIPAL — GÉNÉRIQUE
-# ─────────────────────────────────────────
+def fetch_with_playwright(url):
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page    = browser.new_page()
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            time.sleep(5)
+            content = page.content().encode("utf-8")
+            browser.close()
+            return content
+    except Exception as e:
+        logger.error(f"❌ Erreur Playwright {url} : {e}")
+        return None
+
+def fetch_page(url, file_type):
+    if file_type == "pdf":
+        return fetch_with_requests(url)
+
+    content = fetch_with_requests(url)
+
+    if content is None:
+        return None
+
+    html_text = content.decode("utf-8", errors="ignore")
+
+    if is_dynamic_site(html_text):
+        logger.info(f"🔄 Site dynamique détecté → Playwright : {url}")
+        content = fetch_with_playwright(url)
+
+    return content
+
 def scrape_university(start_url, university, faculty, max_depth=3):
 
     logger.info(f"🚀 Début scraping : {faculty} — {start_url}")
@@ -163,62 +187,57 @@ def scrape_university(start_url, university, faculty, max_depth=3):
         "errors" : 0
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page    = browser.new_page()
+    while queue:
+        url, depth = queue.pop(0)
 
-        while queue:
-            url, depth = queue.pop(0)
+        if url in visited:
+            continue
+        if depth > max_depth:
+            continue
 
-            if url in visited:
-                continue
-            if depth > max_depth:
-                continue
+        visited.add(url)
+        file_type = get_file_type(url)
 
-            visited.add(url)
-            file_type = get_file_type(url)
+        if file_type == "skip":
+            stats["skip"] += 1
+            continue
 
-            if file_type == "skip":
-                stats["skip"] += 1
-                continue
+        try:
+            content = fetch_page(url, file_type)
 
-            try:
-                content = fetch_page_with_playwright(page, url)
-
-                if not content:
-                    stats["errors"] += 1
-                    continue
-
-                save_to_minio(
-                    client     = client,
-                    content    = content,
-                    url        = url,
-                    university = university,
-                    faculty    = faculty,
-                    file_type  = file_type,
-                    depth      = depth
-                )
-
-                stats[file_type if file_type in stats else "html"] += 1
-
-                if file_type == "html" and depth < max_depth:
-                    links = extract_links(
-                        html_content   = content,
-                        base_url       = url,
-                        allowed_domain = allowed_domain
-                    )
-                    for link in links:
-                        if link not in visited:
-                            queue.append((link, depth + 1))
-                    logger.info(f"🔗 {len(links)} liens trouvés sur {url}")
-
-            except Exception as e:
-                logger.error(f"❌ Erreur sur {url} : {e}")
+            if not content:
                 stats["errors"] += 1
+                continue
 
-            time.sleep(0.5)
+            save_to_minio(
+                client     = client,
+                content    = content,
+                url        = url,
+                university = university,
+                faculty    = faculty,
+                file_type  = file_type,
+                depth      = depth
+            )
 
-        browser.close()
+            stats[file_type if file_type in stats else "html"] += 1
+
+            if file_type == "html" and depth < max_depth:
+                html_text = content.decode("utf-8", errors="ignore")
+                links     = extract_links(
+                    html_content   = html_text,
+                    base_url       = url,
+                    allowed_domain = allowed_domain
+                )
+                for link in links:
+                    if link not in visited:
+                        queue.append((link, depth + 1))
+                logger.info(f"🔗 {len(links)} liens trouvés sur {url}")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur sur {url} : {e}")
+            stats["errors"] += 1
+
+        time.sleep(0.5)
 
     logger.info(f"""
     ✅ Scraping terminé pour {faculty}
@@ -232,14 +251,3 @@ def scrape_university(start_url, university, faculty, max_depth=3):
     """)
 
     return stats
-
-# ─────────────────────────────────────────
-# TEST DIRECT
-# ─────────────────────────────────────────
-if __name__ == "__main__":
-    scrape_university(
-        start_url  = "https://fsac.univh2c.ma/",
-        university = "hassan2",
-        faculty    = "FSAC",
-        max_depth  = 3
-    )
