@@ -11,6 +11,9 @@ from urllib.parse import urljoin, urlparse
 from minio import Minio
 from io import BytesIO
 
+# ─────────────────────────────────────────
+# Configuration MinIO
+# ─────────────────────────────────────────
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -18,8 +21,9 @@ MINIO_PASSWORD = "password123"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; UniversityBot/1.0)"}
-
+# ─────────────────────────────────────────
+# Connexion MinIO
+# ─────────────────────────────────────────
 def get_minio_client():
     return Minio(
         MINIO_HOST,
@@ -28,6 +32,9 @@ def get_minio_client():
         secure=False
     )
 
+# ─────────────────────────────────────────
+# Détecter le type de fichier
+# ─────────────────────────────────────────
 def get_file_type(url):
     url_clean = url.lower().split("?")[0].split("#")[0]
     if url_clean.endswith(".pdf"):
@@ -36,11 +43,14 @@ def get_file_type(url):
         return "image"
     elif url_clean.endswith((".json", ".csv")):
         return "json"
-    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".doc", ".docx")):
+    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf")):
         return "skip"
     else:
-        return "html"  # .html ET .php → traités comme HTML
+        return "html"
 
+# ─────────────────────────────────────────
+# Détecter le bucket
+# ─────────────────────────────────────────
 def get_bucket(file_type):
     return {
         "html"  : "raw-web-html",
@@ -49,6 +59,9 @@ def get_bucket(file_type):
         "json"  : "raw-json"
     }.get(file_type, "raw-web-html")
 
+# ─────────────────────────────────────────
+# Sauvegarder dans MinIO
+# ─────────────────────────────────────────
 def save_to_minio(client, content, url, university, faculty, file_type, depth):
     now         = datetime.now()
     filename    = hashlib.md5(url.encode()).hexdigest() + "." + file_type
@@ -92,11 +105,21 @@ def save_to_minio(client, content, url, university, faculty, file_type, depth):
     logger.info(f"✅ Sauvegardé : {url} → {bucket}/{object_path}")
     return metadata
 
+# ─────────────────────────────────────────
+# Extraire les liens depuis le HTML
+# ─────────────────────────────────────────
 def extract_links(html_content, base_url, allowed_domain):
     soup  = BeautifulSoup(html_content, "html.parser")
     links = set()
 
-    for tag in soup.find_all("a"):
+    allowed_domains = {
+        allowed_domain,
+        allowed_domain.replace("www.", ""),
+        "www." + allowed_domain.replace("www.", "")
+    }
+
+    # ← Chercher <a href> ET <img src>
+    for tag in soup.find_all(["a", "link"]):
         href = tag.get("href")
         if not href:
             continue
@@ -106,73 +129,38 @@ def extract_links(html_content, base_url, allowed_domain):
         full_url = urljoin(base_url, href)
         parsed   = urlparse(full_url)
 
-        if parsed.netloc != allowed_domain:
+        if parsed.netloc not in allowed_domains:
             continue
 
-        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        clean_url = f"{parsed.scheme}://{allowed_domain}{parsed.path}"
         if parsed.query:
             clean_url += f"?{parsed.query}"
         links.add(clean_url)
 
+    # ← Ajouter les images <img src>
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if not src:
+            continue
+
+        full_url = urljoin(base_url, src)
+        parsed   = urlparse(full_url)
+
+        if parsed.netloc not in allowed_domains and parsed.netloc != "":
+            continue
+
+        clean_url = f"{parsed.scheme}://{allowed_domain}{parsed.path}"
+        links.add(clean_url)
+
     return links
 
-def is_dynamic_site(html_content):
-    dynamic_indicators = [
-        "callWS", "getTabs", "getPage",
-        "angular", "react", "vue",
-        "$(document).ready"
-    ]
-    for indicator in dynamic_indicators:
-        if indicator in html_content:
-            return True
-    return False
+# ─────────────────────────────────────────
+# SCRAPER PRINCIPAL — GÉNÉRIQUE
+# ─────────────────────────────────────────
+def scrape_university(start_url, university, faculty, max_depth=2):
+    logger.info(f"🚀 Début scraping récursif : {faculty} — {start_url}")
 
-def fetch_with_requests(url):
-    try:
-        response = requests.get(url, timeout=15, headers=HEADERS)
-        if response.status_code == 200:
-            return response.content
-        logger.warning(f"⚠️ Erreur {response.status_code} : {url}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Erreur requests {url} : {e}")
-        return None
-
-def fetch_with_playwright(url):
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page    = browser.new_page()
-            page.goto(url, timeout=30000, wait_until="networkidle")
-            time.sleep(5)
-            content = page.content().encode("utf-8")
-            browser.close()
-            return content
-    except Exception as e:
-        logger.error(f"❌ Erreur Playwright {url} : {e}")
-        return None
-
-def fetch_page(url, file_type):
-    if file_type == "pdf":
-        return fetch_with_requests(url)
-
-    content = fetch_with_requests(url)
-
-    if content is None:
-        return None
-
-    html_text = content.decode("utf-8", errors="ignore")
-
-    if is_dynamic_site(html_text):
-        logger.info(f"🔄 Site dynamique détecté → Playwright : {url}")
-        content = fetch_with_playwright(url)
-
-    return content
-
-def scrape_university(start_url, university, faculty, max_depth=3):
-
-    logger.info(f"🚀 Début scraping : {faculty} — {start_url}")
+    from playwright.sync_api import sync_playwright
 
     client         = get_minio_client()
     visited        = set()
@@ -187,61 +175,89 @@ def scrape_university(start_url, university, faculty, max_depth=3):
         "errors" : 0
     }
 
-    while queue:
-        url, depth = queue.pop(0)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless = False,
+            args     = [
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+            ]
+        )
+        context = browser.new_context(
+            user_agent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport            = {"width": 1280, "height": 720},
+            ignore_https_errors = True
+        )
 
-        if url in visited:
-            continue
-        if depth > max_depth:
-            continue
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['fr-FR', 'fr'] });
+        """)
 
-        visited.add(url)
-        file_type = get_file_type(url)
+        page = context.new_page()
 
-        if file_type == "skip":
-            stats["skip"] += 1
-            continue
+        while queue:
+            url, depth = queue.pop(0)
 
-        try:
-            content = fetch_page(url, file_type)
-
-            if not content:
-                stats["errors"] += 1
+            if url in visited:
+                continue
+            if depth > max_depth:
                 continue
 
-            save_to_minio(
-                client     = client,
-                content    = content,
-                url        = url,
-                university = university,
-                faculty    = faculty,
-                file_type  = file_type,
-                depth      = depth
-            )
+            visited.add(url)
+            file_type = get_file_type(url)
 
-            stats[file_type if file_type in stats else "html"] += 1
+            if file_type == "skip":
+                stats["skip"] += 1
+                continue
 
-            if file_type == "html" and depth < max_depth:
-                html_text = content.decode("utf-8", errors="ignore")
-                links     = extract_links(
-                    html_content   = html_text,
-                    base_url       = url,
-                    allowed_domain = allowed_domain
+            try:
+                logger.info(f"🔄 Traitement ({depth}/{max_depth}) : {url}")
+
+                page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                content = page.content().encode("utf-8")
+
+                if not content:
+                    stats["errors"] += 1
+                    continue
+
+                save_to_minio(
+                    client     = client,
+                    content    = content,
+                    url        = url,
+                    university = university,
+                    faculty    = faculty,
+                    file_type  = file_type,
+                    depth      = depth
                 )
-                for link in links:
-                    if link not in visited:
-                        queue.append((link, depth + 1))
-                logger.info(f"🔗 {len(links)} liens trouvés sur {url}")
 
-        except Exception as e:
-            logger.error(f"❌ Erreur sur {url} : {e}")
-            stats["errors"] += 1
+                stats[file_type if file_type in stats else "html"] += 1
 
-        time.sleep(0.5)
+                if file_type == "html" and depth < max_depth:
+                    extracted_links = extract_links(
+                        html_content   = content,
+                        base_url       = url,
+                        allowed_domain = allowed_domain
+                    )
+                    for link in extracted_links:
+                        if link not in visited:
+                            queue.append((link, depth + 1))
+
+                    logger.info(f"🔗 {len(extracted_links)} liens découverts")
+
+            except Exception as e:
+                logger.error(f"❌ Erreur sur {url} : {e}")
+                stats["errors"] += 1
+
+            time.sleep(0.5)
+
+        browser.close()
 
     logger.info(f"""
-    ✅ Scraping terminé pour {faculty}
-    ─────────────────────────────────
+    ✅ Scraping Récursif Terminé pour {faculty}
+    ─────────────────────────────────────────────
     HTML collectés  : {stats['html']}
     PDFs collectés  : {stats['pdf']}
     Images          : {stats['image']}
@@ -251,3 +267,13 @@ def scrape_university(start_url, university, faculty, max_depth=3):
     """)
 
     return stats
+# ─────────────────────────────────────────
+# TEST DIRECT
+# ─────────────────────────────────────────
+if __name__ == "__main__":
+    scrape_university(
+        start_url  = "https://www.fsbm.ma/",
+        university = "hassan2",
+        faculty    = "FSBM",
+        max_depth  = 3
+    )
