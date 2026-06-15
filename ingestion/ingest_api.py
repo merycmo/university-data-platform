@@ -19,6 +19,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────
+# IDs OpenAlex des universités
+# ─────────────────────────────────────────
+UNIVERSITY_IDS = {
+    "Hassan II"  : "I99297268",
+    "Cadi Ayyad" : "I4210158879"
+}
+
+# ─────────────────────────────────────────
 # Connexion MinIO
 # ─────────────────────────────────────────
 def get_minio_client():
@@ -96,12 +104,11 @@ def fetch_openalex_authors(university_name, faculty_name, max_results=100):
                     "page"     : page,
                     "mailto"   : "university@ma.ma"
                 },
-                timeout=15
+                timeout=30
             )
 
             if response.status_code != 200:
                 logger.warning(f"⚠️ Erreur {response.status_code}")
-                logger.warning(f"⚠️ Réponse : {response.text[:200]}")
                 break
 
             data    = response.json()
@@ -150,23 +157,29 @@ def fetch_openalex_publications(university_name, faculty_name, max_results=200):
     publications = []
     page         = 1
     per_page     = 25
+    uni_id       = UNIVERSITY_IDS.get(university_name, "")
 
     while len(publications) < max_results:
         try:
+            params = {
+                "per_page" : per_page,
+                "page"     : page,
+                "mailto"   : "university@ma.ma"
+            }
+
+            if uni_id:
+                params["filter"] = f"authorships.institutions.id:{uni_id}"
+            else:
+                params["search"] = university_name
+
             response = requests.get(
                 "https://api.openalex.org/works",
-                params={
-                    "search"   : f"{university_name} Casablanca",
-                    "per_page" : per_page,
-                    "page"     : page,
-                    "mailto"   : "university@ma.ma"
-                },
-                timeout=15
+                params  = params,
+                timeout = 30
             )
 
             if response.status_code != 200:
                 logger.warning(f"⚠️ Erreur {response.status_code}")
-                logger.warning(f"⚠️ Réponse : {response.text[:200]}")
                 break
 
             data    = response.json()
