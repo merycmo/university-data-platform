@@ -90,28 +90,21 @@ def fetch_openalex_authors(university_name, faculty_name, max_results=100):
 
     logger.info(f"🔍 OpenAlex auteurs : {faculty_name}")
 
-    authors     = []
-    page        = 1
-    per_page    = 25
-    uni_id      = UNIVERSITY_IDS.get(university_name, "")
+    authors  = []
+    page     = 1
+    per_page = 25
 
     while len(authors) < max_results:
         try:
-            params = {
-                "per_page" : per_page,
-                "page"     : page,
-                "mailto"   : "university@ma.ma"
-            }
-
-            if uni_id:
-                params["filter"] = f"last_known_institution.id:{uni_id}"
-            else:
-                params["search"] = university_name
-
             response = requests.get(
                 "https://api.openalex.org/authors",
-                params  = params,
-                timeout = 30
+                params={
+                    "search"   : university_name,
+                    "per_page" : per_page,
+                    "page"     : page,
+                    "mailto"   : "university@ma.ma"
+                },
+                timeout=30
             )
 
             if response.status_code != 200:
