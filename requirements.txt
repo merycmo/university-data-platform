@@ -7,3 +7,4 @@ apache-airflow==2.8.0
 pandas==2.1.0
 PyPDF2==3.0.0
 python-dotenv==1.0.0
+playwright==1.40.0
