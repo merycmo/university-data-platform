@@ -1,13 +1,8 @@
-# scraper/test_fsbm.py
-import sys
-sys.path.append('.')
-
 from scraper.university_scraper import scrape_university
 
-
 scrape_university(
-    start_url  = "https://flsh-uh2c.ac.ma/",
+    start_url  = "https://www.flsh-uh2c.ac.ma/",
     university = "hassan2",
-    faculty    = "FLSHAC",
+    faculty    = "FLSH",
     max_depth  = 3
 )
