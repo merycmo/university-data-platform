@@ -39,7 +39,7 @@ def get_file_type(url):
     elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".doc", ".docx")):
         return "skip"
     else:
-        return "html"  # .html ET .php → traités comme HTML
+        return "html"
 
 def get_bucket(file_type):
     return {
@@ -96,6 +96,7 @@ def extract_links(html_content, base_url, allowed_domain):
     soup  = BeautifulSoup(html_content, "html.parser")
     links = set()
 
+    # ── Extraire les liens <a> ──
     for tag in soup.find_all("a"):
         href = tag.get("href")
         if not href:
@@ -103,16 +104,28 @@ def extract_links(html_content, base_url, allowed_domain):
         if href.startswith(("#", "javascript", "mailto", "tel")):
             continue
 
-        full_url = urljoin(base_url, href)
-        parsed   = urlparse(full_url)
+        full_url  = urljoin(base_url, href)
+        parsed    = urlparse(full_url)
+        file_type = get_file_type(full_url)
 
-        if parsed.netloc != allowed_domain:
+        # Rester sur le même domaine SAUF pour les images
+        if parsed.netloc != allowed_domain and file_type != "image":
             continue
 
         clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         if parsed.query:
             clean_url += f"?{parsed.query}"
         links.add(clean_url)
+
+    # ── Extraire les images <img> ──
+    for tag in soup.find_all("img"):
+        src = tag.get("src")
+        if not src:
+            continue
+        full_url  = urljoin(base_url, src)
+        file_type = get_file_type(full_url)
+        if file_type == "image":
+            links.add(full_url)
 
     return links
 
@@ -154,9 +167,11 @@ def fetch_with_playwright(url):
         return None
 
 def fetch_page(url, file_type):
-    if file_type == "pdf":
+    # Images et PDFs → toujours requests
+    if file_type in ("pdf", "image"):
         return fetch_with_requests(url)
 
+    # HTML → essayer requests d'abord
     content = fetch_with_requests(url)
 
     if content is None:
@@ -164,6 +179,7 @@ def fetch_page(url, file_type):
 
     html_text = content.decode("utf-8", errors="ignore")
 
+    # Si site dynamique → utiliser Playwright
     if is_dynamic_site(html_text):
         logger.info(f"🔄 Site dynamique détecté → Playwright : {url}")
         content = fetch_with_playwright(url)
