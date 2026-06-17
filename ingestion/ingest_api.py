@@ -12,7 +12,7 @@ import schedule
 # CONFIGURATION
 # ============================================
 BASE_URL = "https://api.openalex.org"
-HEADERS = {"User-Agent": "mailto:AZL@GMAIL.com"}
+HEADERS = {"User-Agent": "mailto:salmaaouzale@gmail.com"}
 
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
