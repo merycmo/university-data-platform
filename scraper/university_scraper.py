@@ -49,18 +49,9 @@ def get_bucket(file_type):
         "json"  : "raw-json"
     }.get(file_type, "raw-web-html")
 
-def get_extension(file_type):
-    return {
-        "html"  : "html",
-        "pdf"   : "pdf",
-        "image" : "jpg",
-        "json"  : "json"
-    }.get(file_type, "html")
-
 def save_to_minio(client, content, url, university, faculty, file_type, depth):
     now         = datetime.now()
-    ext         = get_extension(file_type)
-    filename    = hashlib.md5(url.encode()).hexdigest() + "." + ext
+    filename    = hashlib.md5(url.encode()).hexdigest() + "." + file_type
     object_path = (
         f"university={university}/"
         f"faculty={faculty}/"
@@ -70,19 +61,12 @@ def save_to_minio(client, content, url, university, faculty, file_type, depth):
     bucket   = get_bucket(file_type)
     checksum = hashlib.md5(content).hexdigest()
 
-    content_type_map = {
-        "html"  : "text/html",
-        "pdf"   : "application/pdf",
-        "image" : "image/jpeg",
-        "json"  : "application/json"
-    }
-
     client.put_object(
         bucket_name  = bucket,
         object_name  = object_path,
         data         = BytesIO(content),
         length       = len(content),
-        content_type = content_type_map.get(file_type, "application/octet-stream")
+        content_type = f"application/{file_type}"
     )
 
     metadata = {
@@ -112,11 +96,7 @@ def extract_links(html_content, base_url, allowed_domain):
     soup  = BeautifulSoup(html_content, "html.parser")
     links = set()
 
-<<<<<<< HEAD
-    # ── liens <a> ──────────────────────────────────────────
-=======
     # ── Extraire les liens <a> ──
->>>>>>> main
     for tag in soup.find_all("a"):
         href = tag.get("href")
         if not href:
@@ -137,28 +117,6 @@ def extract_links(html_content, base_url, allowed_domain):
             clean_url += f"?{parsed.query}"
         links.add(clean_url)
 
-<<<<<<< HEAD
-    # ── images <img> et <source> ───────────────────────────
-    for tag in soup.find_all(["img", "source"]):
-        # supporte src, data-src (lazy loading), et srcset
-        src = (
-            tag.get("src")
-            or tag.get("data-src")
-            or tag.get("data-lazy-src")
-            or (tag.get("srcset", "").split()[0] if tag.get("srcset") else None)
-        )
-        if not src or src.startswith("data:"):  # ignore base64 inline
-            continue
-
-        full_url = urljoin(base_url, src)
-        parsed   = urlparse(full_url)
-
-        if parsed.netloc != allowed_domain:
-            continue
-
-        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        links.add(clean_url)
-=======
     # ── Extraire les images <img> ──
     for tag in soup.find_all("img"):
         src = tag.get("src")
@@ -168,7 +126,6 @@ def extract_links(html_content, base_url, allowed_domain):
         file_type = get_file_type(full_url)
         if file_type == "image":
             links.add(full_url)
->>>>>>> main
 
     return links
 
@@ -210,11 +167,7 @@ def fetch_with_playwright(url):
         return None
 
 def fetch_page(url, file_type):
-<<<<<<< HEAD
-    # PDF et images → requests direct, pas besoin de JS
-=======
     # Images et PDFs → toujours requests
->>>>>>> main
     if file_type in ("pdf", "image"):
         return fetch_with_requests(url)
 
@@ -284,7 +237,6 @@ def scrape_university(start_url, university, faculty, max_depth=3):
 
             stats[file_type if file_type in stats else "html"] += 1
 
-            # On n'extrait des liens que depuis les pages HTML
             if file_type == "html" and depth < max_depth:
                 html_text = content.decode("utf-8", errors="ignore")
                 links     = extract_links(
