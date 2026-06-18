@@ -30,23 +30,36 @@ def get_minio_client():
 
 def get_file_type(url):
     url_clean = url.lower().split("?")[0].split("#")[0]
+
     if url_clean.endswith(".pdf"):
         return "pdf"
-    elif url_clean.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")):
+
+    elif url_clean.endswith((".jpg", ".jpeg", ".png", ".gif",
+                              ".webp", ".svg", ".bmp", ".tiff")):
         return "image"
-    elif url_clean.endswith((".json", ".csv")):
+
+    elif url_clean.endswith((".json", ".csv", ".xml", ".txt")):
         return "json"
-    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".doc", ".docx")):
+
+    elif url_clean.endswith((".doc", ".docx", ".ppt", ".pptx",
+                              ".xls", ".xlsx", ".odt", ".ods",
+                              ".odp", ".zip", ".rar")):
+        return "document"
+
+    elif url_clean.endswith((".css", ".js", ".ico", ".map",
+                              ".woff", ".ttf", ".eot", ".woff2")):
         return "skip"
+
     else:
-        return "html"  # .html ET .php → traités comme HTML
+        return "html"
 
 def get_bucket(file_type):
     return {
-        "html"  : "raw-web-html",
-        "pdf"   : "raw-documents",
-        "image" : "raw-images",
-        "json"  : "raw-json"
+        "html"     : "raw-web-html",
+        "pdf"      : "raw-documents",
+        "document" : "raw-documents",
+        "image"    : "raw-images",
+        "json"     : "raw-json"
     }.get(file_type, "raw-web-html")
 
 def save_to_minio(client, content, url, university, faculty, file_type, depth):
@@ -103,16 +116,26 @@ def extract_links(html_content, base_url, allowed_domain):
         if href.startswith(("#", "javascript", "mailto", "tel")):
             continue
 
-        full_url = urljoin(base_url, href)
-        parsed   = urlparse(full_url)
+        full_url  = urljoin(base_url, href)
+        parsed    = urlparse(full_url)
+        file_type = get_file_type(full_url)
 
-        if parsed.netloc != allowed_domain:
+        if parsed.netloc != allowed_domain and file_type != "image":
             continue
 
         clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         if parsed.query:
             clean_url += f"?{parsed.query}"
         links.add(clean_url)
+
+    for tag in soup.find_all("img"):
+        src = tag.get("src")
+        if not src:
+            continue
+        full_url  = urljoin(base_url, src)
+        file_type = get_file_type(full_url)
+        if file_type == "image":
+            links.add(full_url)
 
     return links
 
@@ -127,34 +150,44 @@ def is_dynamic_site(html_content):
             return True
     return False
 
-def fetch_with_requests(url):
-    try:
-        response = requests.get(url, timeout=15, headers=HEADERS)
-        if response.status_code == 200:
-            return response.content
-        logger.warning(f"⚠️ Erreur {response.status_code} : {url}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Erreur requests {url} : {e}")
-        return None
+def fetch_with_requests(url, retries=3):
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, timeout=15, headers=HEADERS)
+            if response.status_code == 200:
+                return response.content
+            logger.warning(f"⚠️ Erreur {response.status_code} : {url}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Tentative {attempt+1}/{retries} échouée : {url}")
+            if attempt < retries - 1:
+                time.sleep(3 * (attempt + 1))
+            else:
+                logger.error(f"❌ Abandon après {retries} tentatives : {url}")
+                return None
 
-def fetch_with_playwright(url):
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page    = browser.new_page()
-            page.goto(url, timeout=30000, wait_until="networkidle")
-            time.sleep(5)
-            content = page.content().encode("utf-8")
-            browser.close()
-            return content
-    except Exception as e:
-        logger.error(f"❌ Erreur Playwright {url} : {e}")
-        return None
+def fetch_with_playwright(url, retries=2):
+    for attempt in range(retries):
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page    = browser.new_page()
+                page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                time.sleep(3)
+                content = page.content().encode("utf-8")
+                browser.close()
+                return content
+        except Exception as e:
+            logger.warning(f"⚠️ Playwright tentative {attempt+1}/{retries} : {url}")
+            if attempt < retries - 1:
+                time.sleep(5)
+            else:
+                logger.error(f"❌ Abandon Playwright : {url}")
+                return None
 
 def fetch_page(url, file_type):
-    if file_type == "pdf":
+    if file_type in ("pdf", "image", "document"):
         return fetch_with_requests(url)
 
     content = fetch_with_requests(url)
@@ -180,11 +213,13 @@ def scrape_university(start_url, university, faculty, max_depth=3):
     queue          = [(start_url, 0)]
 
     stats = {
-        "html"   : 0,
-        "pdf"    : 0,
-        "image"  : 0,
-        "skip"   : 0,
-        "errors" : 0
+        "html"     : 0,
+        "pdf"      : 0,
+        "image"    : 0,
+        "document" : 0,
+        "json"     : 0,
+        "skip"     : 0,
+        "errors"   : 0
     }
 
     while queue:
@@ -237,17 +272,19 @@ def scrape_university(start_url, university, faculty, max_depth=3):
             logger.error(f"❌ Erreur sur {url} : {e}")
             stats["errors"] += 1
 
-        time.sleep(0.5)
+        time.sleep(1.5)
 
     logger.info(f"""
     ✅ Scraping terminé pour {faculty}
     ─────────────────────────────────
-    HTML collectés  : {stats['html']}
-    PDFs collectés  : {stats['pdf']}
-    Images          : {stats['image']}
-    Ignorés         : {stats['skip']}
-    Erreurs         : {stats['errors']}
-    Total visités   : {len(visited)}
+    HTML collectés      : {stats['html']}
+    PDFs collectés      : {stats['pdf']}
+    Documents collectés : {stats['document']}
+    JSON/CSV/XML/TXT    : {stats['json']}
+    Images              : {stats['image']}
+    Ignorés             : {stats['skip']}
+    Erreurs             : {stats['errors']}
+    Total visités       : {len(visited)}
     """)
 
     return stats
