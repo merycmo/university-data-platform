@@ -135,6 +135,6 @@ def process_pdfs(university, faculty):
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     process_pdfs(
-        university = "hassan2",
-        faculty    = "FSAC"
+        university = "cadi_ayyad",
+        faculty    = "FSSM"
     )
