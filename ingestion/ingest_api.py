@@ -273,6 +273,6 @@ def fetch_openalex(university_name, faculty_name):
 # ─────────────────────────────────────────
 if __name__ == "__main__":
     fetch_openalex(
-        university_name = "Hassan II",
-        faculty_name    = "FSAC"
+        university_name = "Cadi Ayyad",
+        faculty_name    = "FSSM"
     )
