@@ -213,7 +213,7 @@ def ingest_faculty(university_name, faculty_name):
 def run_scheduled_ingestion():
     # Exécution immédiate
     ingest_faculty("Hassan II", "FSAC")
-    ingest_faculty("Hassan II", "FSBM")
+    ingest_faculty("Hassan II", "FLSH")          # ← Modifié
     ingest_faculty("Hassan II", "FST")
     ingest_faculty("Cadi Ayyad", "FSJES")
     ingest_faculty("Cadi Ayyad", "FSTG")
@@ -221,7 +221,7 @@ def run_scheduled_ingestion():
 
     # Planification horaire
     schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSAC"))
-    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSBM"))
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FLSH"))   # ← Modifié
     schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FST"))
     schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSJES"))
     schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSTG"))
