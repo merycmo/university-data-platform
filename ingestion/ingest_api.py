@@ -210,30 +210,18 @@ def ingest_faculty(university_name, faculty_name):
 # ============================================
 # FONCTION PRINCIPALE AVEC SCHEDULER
 # ============================================
-def run_scheduled_ingestion():
+def run_scheduled_ingestion(university,faculty):
     # Exécution immédiate
-    ingest_faculty("Hassan II", "FSAC")
-    ingest_faculty("Hassan II", "FLSH")          # ← Modifié
-    ingest_faculty("Hassan II", "FST")
-    ingest_faculty("Cadi Ayyad", "FSJES")
-    ingest_faculty("Cadi Ayyad", "FSTG")
-    ingest_faculty("Cadi Ayyad", "FSSM")
+    ingest_faculty(university,faculty)
+   
 
     # Planification horaire
-    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSAC"))
-    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FLSH"))   # ← Modifié
-    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FST"))
-    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSJES"))
-    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSTG"))
-    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSSM"))
+    schedule.every().hour.do(lambda: ingest_faculty(university,faculty))
+    
 
     print("Lancement de la collecte horaire OpenAlex...")
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-# ============================================
-# EXECUTION
-# ============================================
-if __name__ == "__main__":
-    run_scheduled_ingestion()
+
