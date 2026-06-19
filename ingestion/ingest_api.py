@@ -1,34 +1,30 @@
-# ingestion/ingest_api.py
-
 import requests
 import json
-import logging
-import hashlib
+import time
 from datetime import datetime
 from minio import Minio
 from io import BytesIO
+import hashlib
+import logging
+import schedule
 
-# ─────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────
+# ============================================
+# CONFIGURATION
+# ============================================
+BASE_URL = "https://api.openalex.org"
+HEADERS = {"User-Agent": "mailto:salmaaouzale@gmail.com"}
+
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
+MINIO_BUCKET   = "raw-json"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────
-# IDs OpenAlex des universités
-# ─────────────────────────────────────────
-UNIVERSITY_IDS = {
-    "Hassan II"  : "I99297268",
-    "Cadi Ayyad" : "I4210158879"
-}
-
-# ─────────────────────────────────────────
-# Connexion MinIO
-# ─────────────────────────────────────────
+# ============================================
+# CONNEXION MINIO
+# ============================================
 def get_minio_client():
     return Minio(
         MINIO_HOST,
@@ -37,242 +33,207 @@ def get_minio_client():
         secure=False
     )
 
-# ─────────────────────────────────────────
-# Sauvegarder JSON dans MinIO
-# ─────────────────────────────────────────
-def save_json_to_minio(client, data, university, faculty, source):
+# ============================================
+# SAUVEGARDE JSON DANS MINIO
+# ============================================
+def save_to_minio(data, university, faculty, data_type):
+    try:
+        client = get_minio_client()
+        now = datetime.now()
+        content = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        checksum = hashlib.md5(content).hexdigest()[:8]
 
-    now         = datetime.now()
-    content     = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    checksum    = hashlib.md5(content).hexdigest()
-    filename    = f"{source}_{checksum[:8]}.json"
-    object_path = (
-        f"university={university}/"
-        f"faculty={faculty}/"
-        f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
-        f"{filename}"
-    )
+        object_path = (
+            f"university={university.lower().replace(' ', '_')}/"
+            f"faculty={faculty}/"
+            f"type={data_type}/"
+            f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+            f"{data_type}_{checksum}.json"
+        )
 
-    client.put_object(
-        bucket_name  = "raw-json",
-        object_name  = object_path,
-        data         = BytesIO(content),
-        length       = len(content),
-        content_type = "application/json"
-    )
+        client.put_object(
+            bucket_name=MINIO_BUCKET,
+            object_name=object_path,
+            data=BytesIO(content),
+            length=len(content),
+            content_type="application/json"
+        )
 
-    metadata = {
-        "source"           : source,
-        "university"       : university,
-        "faculty"          : faculty,
-        "crawl_timestamp"  : now.isoformat(),
-        "content_checksum" : checksum,
-        "storage_path"     : f"s3://raw-json/{object_path}",
-        "records_count"    : len(data) if isinstance(data, list) else 1
-    }
+        metadata = {
+            "source": "openalex",
+            "university": university,
+            "faculty": faculty,
+            "data_type": data_type,
+            "crawl_timestamp": now.isoformat(),
+            "records_count": len(data)
+        }
 
-    meta_content = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
-    client.put_object(
-        bucket_name  = "raw-json",
-        object_name  = object_path + ".meta.json",
-        data         = BytesIO(meta_content),
-        length       = len(meta_content),
-        content_type = "application/json"
-    )
+        meta_content = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+        client.put_object(
+            bucket_name=MINIO_BUCKET,
+            object_name=object_path + ".meta.json",
+            data=BytesIO(meta_content),
+            length=len(meta_content),
+            content_type="application/json"
+        )
 
-    logger.info(f"✅ Sauvegardé dans raw-json : {object_path}")
-    return metadata
+        logger.info(f"Sauvegarde MinIO reussie : {object_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur MinIO : {e}")
+        return False
 
-# ─────────────────────────────────────────
-# Appel API OpenAlex — Auteurs
-# ─────────────────────────────────────────
-def fetch_openalex_authors(university_name, faculty_name, max_results=100):
+# ============================================
+# RECUPERATION ID UNIVERSITE
+# ============================================
+def get_institution_id(university_name):
+    url = f"https://api.openalex.org/institutions?search={university_name}"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            if results:
+                inst_id = results[0]["id"].split("/")[-1]
+                print(f"ID trouve pour {university_name} : {inst_id}")
+                return inst_id
+    except:
+        pass
+    print(f"ID non trouve pour {university_name}")
+    return None
 
-    logger.info(f"🔍 OpenAlex auteurs : {faculty_name}")
+# ============================================
+# RECUPERATION AUTEURS (max 500)
+# ============================================
+def get_authors_by_faculty(university_name, faculty_name, max_authors=500):
+    inst_id = get_institution_id(university_name)
+    if not inst_id:
+        return []
 
-    authors  = []
-    page     = 1
-    per_page = 25
-
-    while len(authors) < max_results:
+    authors = []
+    page = 1
+    while len(authors) < max_authors:
+        url = f"{BASE_URL}/authors?filter=last_known_institutions.id:{inst_id}&per_page=200&page={page}"
         try:
-            response = requests.get(
-                "https://api.openalex.org/authors",
-                params={
-                    "search"   : university_name,
-                    "per_page" : per_page,
-                    "page"     : page,
-                    "mailto"   : "university@ma.ma"
-                },
-                timeout=30
-            )
-
-            if response.status_code != 200:
-                logger.warning(f"⚠️ Erreur {response.status_code}")
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            if r.status_code != 200:
                 break
-
-            data    = response.json()
-            results = data.get("results", [])
-
+            results = r.json().get("results", [])
             if not results:
                 break
-
-            for author in results:
-                authors.append({
-                    "openalex_id"        : author.get("id", ""),
-                    "name"               : author.get("display_name", ""),
-                    "orcid"              : author.get("orcid", ""),
-                    "publications_count" : author.get("works_count", 0),
-                    "citations_count"    : author.get("cited_by_count", 0),
-                    "research_topics"    : [
-                        t.get("display_name", "")
-                        for t in author.get("topics", [])[:5]
-                    ],
-                    "university"         : university_name,
-                    "faculty"            : faculty_name,
-                    "source"             : "openalex",
-                    "fetched_at"         : datetime.now().isoformat()
-                })
-
-            logger.info(f"📄 Page {page} → {len(results)} auteurs")
-            page += 1
-
-            if len(results) < per_page:
+            authors.extend(results)
+            if len(authors) >= max_authors:
                 break
-
-        except Exception as e:
-            logger.error(f"❌ Erreur : {e}")
+            page += 1
+            time.sleep(0.5)
+        except:
             break
+    return authors[:max_authors]
 
-    logger.info(f"✅ {len(authors)} auteurs récupérés")
-    return authors
-
-# ─────────────────────────────────────────
-# Appel API OpenAlex — Publications
-# ─────────────────────────────────────────
-def fetch_openalex_publications(university_name, faculty_name, max_results=200):
-
-    logger.info(f"📚 OpenAlex publications : {faculty_name}")
+# ============================================
+# RECUPERATION PUBLICATIONS (max 5000)
+# ============================================
+def get_publications_by_faculty(university_name, faculty_name, max_works=5000):
+    inst_id = get_institution_id(university_name)
+    if not inst_id:
+        return []
 
     publications = []
-    page         = 1
-    per_page     = 25
-    uni_id       = UNIVERSITY_IDS.get(university_name, "")
-
-    while len(publications) < max_results:
+    page = 1
+    while len(publications) < max_works:
+        url = f"{BASE_URL}/works?filter=authorships.institutions.id:{inst_id}&per_page=200&page={page}"
         try:
-            params = {
-                "per_page" : per_page,
-                "page"     : page,
-                "mailto"   : "university@ma.ma"
-            }
-
-            if uni_id:
-                params["filter"] = f"authorships.institutions.id:{uni_id}"
-            else:
-                params["search"] = university_name
-
-            response = requests.get(
-                "https://api.openalex.org/works",
-                params  = params,
-                timeout = 30
-            )
-
-            if response.status_code != 200:
-                logger.warning(f"⚠️ Erreur {response.status_code}")
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            if r.status_code != 200:
                 break
-
-            data    = response.json()
-            results = data.get("results", [])
-
+            results = r.json().get("results", [])
             if not results:
                 break
-
-            for work in results:
-                publications.append({
-                    "openalex_id"     : work.get("id", ""),
-                    "title"           : work.get("title", ""),
-                    "publication_year": work.get("publication_year", ""),
-                    "doi"             : work.get("doi", ""),
-                    "citations_count" : work.get("cited_by_count", 0),
-                    "type"            : work.get("type", ""),
-                    "topics"          : [
-                        t.get("display_name", "")
-                        for t in work.get("topics", [])[:5]
-                    ],
-                    "authors"         : [
-                        a.get("author", {}).get("display_name", "")
-                        for a in work.get("authorships", [])[:5]
-                    ],
-                    "university"      : university_name,
-                    "faculty"         : faculty_name,
-                    "source"          : "openalex",
-                    "fetched_at"      : datetime.now().isoformat()
-                })
-
-            logger.info(f"📄 Page {page} → {len(results)} publications")
-            page += 1
-
-            if len(results) < per_page:
+            publications.extend(results)
+            if len(publications) >= max_works:
                 break
-
-        except Exception as e:
-            logger.error(f"❌ Erreur : {e}")
+            page += 1
+            time.sleep(0.5)
+        except:
             break
+    return publications[:max_works]
 
-    logger.info(f"✅ {len(publications)} publications récupérées")
-    return publications
+# ============================================
+# ENRICHIR LES PUBLICATIONS
+# ============================================
+def enrich_publications(works, university_name, faculty_name):
+    enriched = []
+    for w in works:
+        enriched.append({
+            "work_id": w.get("id"),
+            "title": w.get("display_name"),
+            "university": university_name,
+            "faculty": faculty_name,
+            "publication_year": w.get("publication_year"),
+            "cited_by_count": w.get("cited_by_count", 0),
+            "type": w.get("type"),
+            "doi": w.get("doi"),
+            "open_access": w.get("open_access", {}).get("is_oa", False),
+            "retrieved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+    return enriched
 
-# ─────────────────────────────────────────
-# FONCTION PRINCIPALE
-# ─────────────────────────────────────────
-def fetch_openalex(university_name, faculty_name):
+# ============================================
+# SAUVEGARDE JSON LOCALE
+# ============================================
+def save_json(data, filename):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print(f"JSON cree : {filename} ({len(data)} enregistrements)")
 
-    logger.info(f"🚀 Fetch API : {faculty_name} — {university_name}")
+# ============================================
+# FONCTION D'INGESTION
+# ============================================
+def ingest_faculty(university_name, faculty_name):
+    print(f"\n{'='*70}")
+    print(f"INGESTION PROGRAMMEE - {faculty_name} ({university_name})")
+    print(f"{'='*70}\n")
 
-    client = get_minio_client()
+    authors = get_authors_by_faculty(university_name, faculty_name)
+    publications = get_publications_by_faculty(university_name, faculty_name)
+    enriched_pub = enrich_publications(publications, university_name, faculty_name)
 
-    # Auteurs
-    authors = fetch_openalex_authors(university_name, faculty_name)
-    if authors:
-        save_json_to_minio(
-            client     = client,
-            data       = authors,
-            university = university_name.lower().replace(" ", "_"),
-            faculty    = faculty_name,
-            source     = "openalex_authors"
-        )
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Publications
-    publications = fetch_openalex_publications(university_name, faculty_name)
-    if publications:
-        save_json_to_minio(
-            client     = client,
-            data       = publications,
-            university = university_name.lower().replace(" ", "_"),
-            faculty    = faculty_name,
-            source     = "openalex_publications"
-        )
+    save_json(authors, f"authors_{faculty_name}_{timestamp}.json")
+    save_json(enriched_pub, f"publications_{faculty_name}_{timestamp}.json")
 
-    stats = {
-        "authors"      : len(authors),
-        "publications" : len(publications)
-    }
+    save_to_minio(authors, university_name, faculty_name, "authors")
+    save_to_minio(enriched_pub, university_name, faculty_name, "publications")
 
-    logger.info(f"""
-    ✅ Fetch API terminé pour {faculty_name}
-    ──────────────────────────────────────
-    Auteurs        : {stats['authors']}
-    Publications   : {stats['publications']}
-    """)
+    print(f"Termine -> {len(authors)} auteurs | {len(enriched_pub)} publications\n")
 
-    return stats
+# ============================================
+# FONCTION PRINCIPALE AVEC SCHEDULER
+# ============================================
+def run_scheduled_ingestion():
+    # Exécution immédiate
+    ingest_faculty("Hassan II", "FSAC")
+    ingest_faculty("Hassan II", "FLSH")          # ← Modifié
+    ingest_faculty("Hassan II", "FST")
+    ingest_faculty("Cadi Ayyad", "FSJES")
+    ingest_faculty("Cadi Ayyad", "FSTG")
+    ingest_faculty("Cadi Ayyad", "FSSM")
 
-# ─────────────────────────────────────────
-# TEST DIRECT
-# ─────────────────────────────────────────
+    # Planification horaire
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSAC"))
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FLSH"))   # ← Modifié
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FST"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSJES"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSTG"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSSM"))
+
+    print("Lancement de la collecte horaire OpenAlex...")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# ============================================
+# EXECUTION
+# ============================================
 if __name__ == "__main__":
-    fetch_openalex(
-        university_name = "Cadi Ayyad",
-        faculty_name    = "FSSM"
-    )
+    ingest_faculty("Cadi Ayyad", "FSSM")
