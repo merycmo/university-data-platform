@@ -210,13 +210,13 @@ def ingest_faculty(university_name, faculty_name):
 # ============================================
 # FONCTION PRINCIPALE AVEC SCHEDULER
 # ============================================
-def run_scheduled_ingestion(university,faculty):
+def run_scheduled_ingestion(university_name,faculty_name):
     # Exécution immédiate
-    ingest_faculty(university,faculty)
+    ingest_faculty(university_name,faculty_name)
    
 
     # Planification horaire
-    schedule.every().hour.do(lambda: ingest_faculty(university,faculty))
+    schedule.every().hour.do(lambda: ingest_faculty(university_name,faculty_name))
     
 
     print("Lancement de la collecte horaire OpenAlex...")
