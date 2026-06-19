@@ -100,7 +100,11 @@ def get_metadata(client, object_path):
     except:
         return {}
 
+<<<<<<< HEAD
 def run_file_ingestion(university="hassan2", faculty="FLSH"):
+=======
+def run_file_ingestion(university="hassan2", faculty="FSAC"):
+>>>>>>> origin/main
     client = get_minio_client()
     logger.info(f"🚀 Début extraction texte — {faculty}")
 
@@ -166,4 +170,8 @@ def run_file_ingestion(university="hassan2", faculty="FLSH"):
     return stats
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     run_file_ingestion(university="hassan2", faculty="FLSH")
+=======
+    run_file_ingestion(university="hassan2", faculty="FSAC")
+>>>>>>> origin/main
