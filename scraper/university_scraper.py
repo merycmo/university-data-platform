@@ -1,24 +1,25 @@
-# scraper/university_scraper.py
+# ingestion/ingest_file.py
 
 import hashlib
 import json
-import time
 import logging
-import requests
-from bs4 import BeautifulSoup
+import time
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
-from minio import Minio
 from io import BytesIO
+
+import pdfplumber
+from docx import Document
+from minio import Minio
 
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
 
+SOURCE_BUCKET  = "raw-documents"
+TARGET_BUCKET  = "raw-json"
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; UniversityBot/1.0)"}
 
 def get_minio_client():
     return Minio(
@@ -28,242 +29,141 @@ def get_minio_client():
         secure=False
     )
 
-def get_file_type(url):
-    url_clean = url.lower().split("?")[0].split("#")[0]
-    if url_clean.endswith(".pdf"):
-        return "pdf"
-    elif url_clean.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")):
-        return "image"
-    elif url_clean.endswith((".json", ".csv")):
-        return "json"
-    elif url_clean.endswith((".css", ".js", ".ico", ".xml", ".txt", ".map", ".woff", ".ttf", ".doc", ".docx")):
-        return "skip"
-    else:
-        return "html"
+def extract_text_pdf(content):
+    try:
+        with pdfplumber.open(BytesIO(content)) as pdf:
+            text = ""
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+        return text.strip()
+    except Exception as e:
+        logger.error(f"❌ Erreur extraction PDF : {e}")
+        return ""
 
-def get_bucket(file_type):
-    return {
-        "html"  : "raw-web-html",
-        "pdf"   : "raw-documents",
-        "image" : "raw-images",
-        "json"  : "raw-json"
-    }.get(file_type, "raw-web-html")
+def extract_text_docx(content):
+    try:
+        doc  = Document(BytesIO(content))
+        text = "\n".join([para.text for para in doc.paragraphs if para.text])
+        return text.strip()
+    except Exception as e:
+        logger.error(f"❌ Erreur extraction DOCX : {e}")
+        return ""
 
-def save_to_minio(client, content, url, university, faculty, file_type, depth):
-    now         = datetime.now()
-    filename    = hashlib.md5(url.encode()).hexdigest() + "." + file_type
-    object_path = (
-        f"university={university}/"
-        f"faculty={faculty}/"
-        f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
-        f"{filename}"
-    )
-    bucket   = get_bucket(file_type)
-    checksum = hashlib.md5(content).hexdigest()
+def save_extracted(client, text, original_path, original_metadata):
+    if not text:
+        logger.warning(f"⚠️ Texte vide, ignoré : {original_path}")
+        return None
+
+    now      = datetime.now()
+    checksum = hashlib.md5(text.encode()).hexdigest()
+
+    object_path = original_path.replace(".pdf", ".json") \
+                               .replace(".docx", ".json") \
+                               .replace(".doc", ".json")
+
+    payload = {
+        "metadata": {
+            "source_bucket"    : SOURCE_BUCKET,
+            "source_path"      : original_path,
+            "source_url"       : original_metadata.get("source_url", ""),
+            "university"       : original_metadata.get("university", ""),
+            "faculty"          : original_metadata.get("faculty", ""),
+            "extraction_type"  : "text_extraction",
+            "crawl_timestamp"  : original_metadata.get("crawl_timestamp", ""),
+            "extract_timestamp": now.isoformat(),
+            "content_checksum" : checksum,
+            "storage_path"     : f"s3://{TARGET_BUCKET}/{object_path}"
+        },
+        "text": text
+    }
+
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
     client.put_object(
-        bucket_name  = bucket,
+        bucket_name  = TARGET_BUCKET,
         object_name  = object_path,
         data         = BytesIO(content),
         length       = len(content),
-        content_type = f"application/{file_type}"
-    )
-
-    metadata = {
-        "source_url"       : url,
-        "university"       : university,
-        "faculty"          : faculty,
-        "depth_level"      : depth,
-        "file_type"        : file_type,
-        "crawl_timestamp"  : now.isoformat(),
-        "content_checksum" : checksum,
-        "storage_path"     : f"s3://{bucket}/{object_path}"
-    }
-
-    meta_content = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
-    client.put_object(
-        bucket_name  = bucket,
-        object_name  = object_path + ".meta.json",
-        data         = BytesIO(meta_content),
-        length       = len(meta_content),
         content_type = "application/json"
     )
 
-    logger.info(f"✅ Sauvegardé : {url} → {bucket}/{object_path}")
-    return metadata
+    logger.info(f"✅ Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
+    return object_path
 
-def extract_links(html_content, base_url, allowed_domain):
-    soup  = BeautifulSoup(html_content, "html.parser")
-    links = set()
-
-    # ── Extraire les liens <a> ──
-    for tag in soup.find_all("a"):
-        href = tag.get("href")
-        if not href:
-            continue
-        if href.startswith(("#", "javascript", "mailto", "tel")):
-            continue
-
-        full_url  = urljoin(base_url, href)
-        parsed    = urlparse(full_url)
-        file_type = get_file_type(full_url)
-
-        # Rester sur le même domaine SAUF pour les images
-        if parsed.netloc != allowed_domain and file_type != "image":
-            continue
-
-        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        if parsed.query:
-            clean_url += f"?{parsed.query}"
-        links.add(clean_url)
-
-    # ── Extraire les images <img> ──
-    for tag in soup.find_all("img"):
-        src = tag.get("src")
-        if not src:
-            continue
-        full_url  = urljoin(base_url, src)
-        file_type = get_file_type(full_url)
-        if file_type == "image":
-            links.add(full_url)
-
-    return links
-
-def is_dynamic_site(html_content):
-    dynamic_indicators = [
-        "callWS", "getTabs", "getPage",
-        "angular", "react", "vue",
-        "$(document).ready"
-    ]
-    for indicator in dynamic_indicators:
-        if indicator in html_content:
-            return True
-    return False
-
-def fetch_with_requests(url):
+def get_metadata(client, object_path):
     try:
-        response = requests.get(url, timeout=15, headers=HEADERS)
-        if response.status_code == 200:
-            return response.content
-        logger.warning(f"⚠️ Erreur {response.status_code} : {url}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Erreur requests {url} : {e}")
-        return None
+        meta_path = object_path + ".meta.json"
+        response  = client.get_object(SOURCE_BUCKET, meta_path)
+        return json.loads(response.read().decode("utf-8"))
+    except:
+        return {}
 
-def fetch_with_playwright(url):
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page    = browser.new_page()
-            page.goto(url, timeout=30000, wait_until="networkidle")
-            time.sleep(5)
-            content = page.content().encode("utf-8")
-            browser.close()
-            return content
-    except Exception as e:
-        logger.error(f"❌ Erreur Playwright {url} : {e}")
-        return None
+def run_file_ingestion(university="hassan2", faculty="FST"):
+    client = get_minio_client()
+    logger.info(f"🚀 Début extraction texte — {faculty}")
 
-def fetch_page(url, file_type):
-    # Images et PDFs → toujours requests
-    if file_type in ("pdf", "image"):
-        return fetch_with_requests(url)
-
-    # HTML → essayer requests d'abord
-    content = fetch_with_requests(url)
-
-    if content is None:
-        return None
-
-    html_text = content.decode("utf-8", errors="ignore")
-
-    # Si site dynamique → utiliser Playwright
-    if is_dynamic_site(html_text):
-        logger.info(f"🔄 Site dynamique détecté → Playwright : {url}")
-        content = fetch_with_playwright(url)
-
-    return content
-
-def scrape_university(start_url, university, faculty, max_depth=3):
-
-    logger.info(f"🚀 Début scraping : {faculty} — {start_url}")
-
-    client         = get_minio_client()
-    visited        = set()
-    allowed_domain = urlparse(start_url).netloc
-    queue          = [(start_url, 0)]
+    objects = client.list_objects(
+        SOURCE_BUCKET,
+        prefix    = f"university={university}/faculty={faculty}/",
+        recursive = True
+    )
 
     stats = {
-        "html"   : 0,
         "pdf"    : 0,
-        "image"  : 0,
-        "skip"   : 0,
+        "docx"   : 0,
+        "skipped": 0,
         "errors" : 0
     }
 
-    while queue:
-        url, depth = queue.pop(0)
+    for obj in objects:
+        path = obj.object_name
 
-        if url in visited:
-            continue
-        if depth > max_depth:
-            continue
-
-        visited.add(url)
-        file_type = get_file_type(url)
-
-        if file_type == "skip":
-            stats["skip"] += 1
+        if path.endswith(".meta.json"):
             continue
 
         try:
-            content = fetch_page(url, file_type)
+            response = client.get_object(SOURCE_BUCKET, path)
+            content  = response.read()
 
-            if not content:
-                stats["errors"] += 1
+            if path.endswith(".pdf"):
+                text      = extract_text_pdf(content)
+                file_type = "pdf"
+
+            elif path.endswith((".docx", ".doc")):
+                text      = extract_text_docx(content)
+                file_type = "docx"
+
+            else:
+                stats["skipped"] += 1
                 continue
 
-            save_to_minio(
-                client     = client,
-                content    = content,
-                url        = url,
-                university = university,
-                faculty    = faculty,
-                file_type  = file_type,
-                depth      = depth
-            )
+            metadata = get_metadata(client, path)
 
-            stats[file_type if file_type in stats else "html"] += 1
+            result = save_extracted(client, text, path, metadata)
 
-            if file_type == "html" and depth < max_depth:
-                html_text = content.decode("utf-8", errors="ignore")
-                links     = extract_links(
-                    html_content   = html_text,
-                    base_url       = url,
-                    allowed_domain = allowed_domain
-                )
-                for link in links:
-                    if link not in visited:
-                        queue.append((link, depth + 1))
-                logger.info(f"🔗 {len(links)} liens trouvés sur {url}")
+            if result:
+                stats[file_type] += 1
+            else:
+                stats["skipped"] += 1
 
         except Exception as e:
-            logger.error(f"❌ Erreur sur {url} : {e}")
+            logger.error(f"❌ Erreur sur {path} : {e}")
             stats["errors"] += 1
 
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     logger.info(f"""
-    ✅ Scraping terminé pour {faculty}
-    ─────────────────────────────────
-    HTML collectés  : {stats['html']}
-    PDFs collectés  : {stats['pdf']}
-    Images          : {stats['image']}
-    Ignorés         : {stats['skip']}
+    ✅ Extraction terminée pour {faculty}
+    ─────────────────────────────────────
+    PDFs extraits   : {stats['pdf']}
+    DOCXs extraits  : {stats['docx']}
+    Ignorés         : {stats['skipped']}
     Erreurs         : {stats['errors']}
-    Total visités   : {len(visited)}
     """)
 
     return stats
+
+if __name__ == "__main__":
+    run_file_ingestion(university="hassan2", faculty="FST")
