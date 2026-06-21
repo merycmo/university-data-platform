@@ -215,13 +215,4 @@ def run_scheduled_ingestion(university,faculty):
     ingest_faculty(university,faculty)
    
 
-    # Planification horaire
-    schedule.every().hour.do(lambda: ingest_faculty(university,faculty))
-    
-
-    print("Lancement de la collecte horaire OpenAlex...")
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
 
