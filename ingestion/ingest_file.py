@@ -39,7 +39,7 @@ def extract_text_pdf(content):
                     text += page_text + "\n"
         return text.strip()
     except Exception as e:
-        logger.error(f"❌ Erreur extraction PDF : {e}")
+        logger.error(f" Erreur extraction PDF : {e}")
         return ""
 
 def extract_text_docx(content):
@@ -48,12 +48,12 @@ def extract_text_docx(content):
         text = "\n".join([para.text for para in doc.paragraphs if para.text])
         return text.strip()
     except Exception as e:
-        logger.error(f"❌ Erreur extraction DOCX : {e}")
+        logger.error(f" Erreur extraction DOCX : {e}")
         return ""
 
 def save_extracted(client, text, original_path, original_metadata):
     if not text:
-        logger.warning(f"⚠️ Texte vide, ignoré : {original_path}")
+        logger.warning(f" Texte vide, ignoré : {original_path}")
         return None
 
     now      = datetime.now()
@@ -89,7 +89,7 @@ def save_extracted(client, text, original_path, original_metadata):
         content_type = "application/json"
     )
 
-    logger.info(f"✅ Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
+    logger.info(f" Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
     return object_path
 
 def get_metadata(client, object_path):
@@ -102,7 +102,7 @@ def get_metadata(client, object_path):
 
 def run_file_ingestion(university="hassan2", faculty="FSAC"):
     client = get_minio_client()
-    logger.info(f"🚀 Début extraction texte — {faculty}")
+    logger.info(f" Début extraction texte — {faculty}")
 
     objects = client.list_objects(
         SOURCE_BUCKET,
@@ -149,13 +149,13 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
                 stats["skipped"] += 1
 
         except Exception as e:
-            logger.error(f"❌ Erreur sur {path} : {e}")
+            logger.error(f" Erreur sur {path} : {e}")
             stats["errors"] += 1
 
         time.sleep(0.2)
 
     logger.info(f"""
-    ✅ Extraction terminée pour {faculty}
+     Extraction terminée pour {faculty}
     ─────────────────────────────────────
     PDFs extraits   : {stats['pdf']}
     DOCXs extraits  : {stats['docx']}
@@ -165,5 +165,3 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
 
     return stats
 
-if __name__ == "__main__":
-    run_file_ingestion(university="hassan2", faculty="FSAC")
