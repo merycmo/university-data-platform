@@ -165,5 +165,3 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
 
     return stats
 
-if __name__ == "__main__":
-    run_file_ingestion(university="hassan2", faculty="FSAC")
