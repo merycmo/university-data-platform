@@ -44,17 +44,15 @@ services:
   spark-master:
     image: apache/spark:3.5.0
     container_name: university_spark_master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     ports:
       - "8080:8080"
       - "7077:7077"
-    environment:
-      SPARK_MODE: master
     volumes:
-      - ../dags:/opt/spark/work-dir/dags
-      - ../spark:/opt/spark/work-dir/spark
-      - ../logs:/opt/spark/work-dir/logs
-    depends_on:
-      - minio
+      - ../spark:/opt/spark-apps
+      - ../ingestion:/opt/ingestion
 
   # ─── Spark Worker ─────────────────────────────────────
   spark-worker:
