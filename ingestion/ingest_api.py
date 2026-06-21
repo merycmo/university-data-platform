@@ -221,3 +221,5 @@ def run_scheduled_ingestion(university,faculty):
    
 
 
+if __name__ == "__main__":
+    ingest_faculty("Cadi Ayyad", "fmpm")
