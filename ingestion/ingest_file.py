@@ -10,7 +10,7 @@ from io import BytesIO
 import pdfplumber
 from docx import Document
 from minio import Minio
-
+from ingest_logs import info, error
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -101,6 +101,13 @@ def get_metadata(client, object_path):
         return {}
 
 def run_file_ingestion(university="hassan2", faculty="FSAC"):
+  try:
+    info(
+            message=f"Début de l'extraction des fichiers - {faculty}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file"
+        )
     client = get_minio_client()
     logger.info(f" Début extraction texte — {faculty}")
 
@@ -153,7 +160,11 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
             stats["errors"] += 1
 
         time.sleep(0.2)
-
+    info(
+            message=f"Extraction terminée - {faculty} | PDFs: {stats['pdf']} | DOCX: {stats['docx']} | Erreurs: {stats['errors']}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file")
     logger.info(f"""
      Extraction terminée pour {faculty}
     ─────────────────────────────────────
@@ -164,4 +175,13 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
     """)
 
     return stats
+  except Exception as e:
+        # LOG ERREUR 
+        error(
+            message=f"Erreur pendant l'extraction des fichiers : {str(e)}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file"
+        )
+        raise
 

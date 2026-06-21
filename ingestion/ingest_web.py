@@ -10,7 +10,7 @@ from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from minio import Minio
 from io import BytesIO
-
+from ingest_logs import info, error
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -204,7 +204,14 @@ def fetch_page(url, file_type):
     return content
 
 def scrape_university(start_url, university, faculty, max_depth=3):
-
+    #log début de scraping
+  try:
+    info(
+        message=f"Début du scraping - {faculty} | URL: {start_url}",
+        university=university,
+        faculty=faculty,
+        source="ingest_web"
+    )
     logger.info(f" Début scraping : {faculty} — {start_url}")
 
     client         = get_minio_client()
@@ -271,8 +278,23 @@ def scrape_university(start_url, university, faculty, max_depth=3):
         except Exception as e:
             logger.error(f" Erreur sur {url} : {e}")
             stats["errors"] += 1
+            #  LOG ERREUR 
+            error(
+                    message=f"Erreur sur {url} : {str(e)}",
+                    university=university,
+                    faculty=faculty,
+                    source="ingest_web"
+                )
 
+            
         time.sleep(1.5)
+    #log fin de scraping
+    info(
+        message=f"Scraping terminé - {faculty} | HTML: {stats['html']} | PDF: {stats['pdf']} | Erreurs: {stats['errors']}",
+        university=university,
+        faculty=faculty,
+        source="ingest_web"
+    )
 
     logger.info(f"""
      Scraping terminé pour {faculty}
@@ -288,3 +310,12 @@ def scrape_university(start_url, university, faculty, max_depth=3):
     """)
 
     return stats
+  except Exception as e:
+        #  LOG ERREUR GÉNÉRALE 
+        error(
+            message=f"Erreur critique pendant le scraping : {str(e)}",
+            university=university,
+            faculty=faculty,
+            source="ingest_web"
+        )
+        raise
