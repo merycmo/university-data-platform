@@ -319,3 +319,11 @@ def scrape_university(start_url, university, faculty, max_depth=3):
             source="ingest_web"
         )
         raise
+  
+if __name__ == "__main__":
+    scrape_university(
+        start_url  = "https://fmpm.uca.ma/",
+        university = "cadi_ayyad",
+        faculty    = "fmpm",
+        max_depth  = 3
+    )
