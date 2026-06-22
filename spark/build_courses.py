@@ -14,14 +14,12 @@ MINIO_PASSWORD  = "password123"
 HUDI_TABLE_NAME = "course_catalog"
 HUDI_TABLE_PATH = "s3a://curated/course_catalog"
 
-# Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
     "hassan2": ["hassan2", "hassan_ii", "Hassan II", "hassan_2"],
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
 }
 
-# Mots-clés pour repérer les documents de formations (extensible si besoin)
-COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus"]
+COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus", "licence", "master", "doctorat", "module", "cours", "syllabus", "guide", "convention", "partenariat"]
 
 
 def get_spark_session():
@@ -44,10 +42,6 @@ def get_spark_session():
 
 
 def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath=""):
-    """
-    Essaie plusieurs variantes du nom d'université pour trouver celle qui existe vraiment dans MinIO.
-    Évite le bug 'hassan2 vs hassan_ii vs Hassan II'.
-    """
     sc = spark.sparkContext
     hadoop_conf = sc._jsc.hadoopConfiguration()
     fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(
@@ -78,7 +72,6 @@ def find_existing_university_path(spark, university_hint, faculty, bucket="raw-j
 
 
 def read_extracted_text(spark, university, faculty):
-    """Lit tous les textes extraits des PDFs (depuis ingest_file.py)"""
     resolved_university, path = find_existing_university_path(
         spark, university, faculty, bucket="raw-json", subpath=""
     )
@@ -88,22 +81,27 @@ def read_extracted_text(spark, university, faculty):
 
 
 def normalize_course_catalog(df, university, faculty):
-    """Filtre les documents liés aux formations et construit le catalogue de cours"""
+    # Détecte si c'est le format ingest_file (source_path + extracted_text)
+    # ou le format ancien (metadata.source_url + text)
+    columns = df.columns
 
-    with_path = df.withColumn("source_path", col("metadata.source_url")) \
-                  .withColumn("text_content", col("text"))
+    if "source_path" in columns:
+        with_path = df.withColumn("source_path_col", col("source_path")) \
+                      .withColumn("text_content", col("extracted_text"))
+    else:
+        with_path = df.withColumn("source_path_col", col("metadata.source_url")) \
+                      .withColumn("text_content", col("text"))
 
-    # Construit dynamiquement le filtre OR à partir de COURSE_KEYWORDS
     keyword_filter = None
     for kw in COURSE_KEYWORDS:
-        cond = lower(col("source_path")).contains(kw)
+        cond = lower(col("text_content")).contains(kw)
         keyword_filter = cond if keyword_filter is None else (keyword_filter | cond)
 
     formations_only = with_path.filter(keyword_filter)
 
     normalized = formations_only.withColumn(
         "raw_filename",
-        regexp_extract(col("source_path"), r"([^/]+)\.pdf$", 1)
+        regexp_extract(col("source_path_col"), r"([^/]+)\.pdf$", 1)
     )
 
     normalized = normalized.withColumn(
@@ -120,7 +118,7 @@ def normalize_course_catalog(df, university, faculty):
     normalized = normalized.select(
         "course_name",
         "raw_filename",
-        "source_path",
+        col("source_path_col").alias("source_path"),
         "text_content"
     )
 
@@ -191,4 +189,4 @@ def run_build_courses(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    run_build_courses(university="hassan2", faculty="FSAC")
+    run_build_courses(university="cadi_ayyad", faculty="FSSM")
