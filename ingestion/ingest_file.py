@@ -10,7 +10,7 @@ from io import BytesIO
 import pdfplumber
 from docx import Document
 from minio import Minio
-
+from .ingest_logs import info, error
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -39,7 +39,7 @@ def extract_text_pdf(content):
                     text += page_text + "\n"
         return text.strip()
     except Exception as e:
-        logger.error(f"❌ Erreur extraction PDF : {e}")
+        logger.error(f" Erreur extraction PDF : {e}")
         return ""
 
 def extract_text_docx(content):
@@ -48,12 +48,12 @@ def extract_text_docx(content):
         text = "\n".join([para.text for para in doc.paragraphs if para.text])
         return text.strip()
     except Exception as e:
-        logger.error(f"❌ Erreur extraction DOCX : {e}")
+        logger.error(f" Erreur extraction DOCX : {e}")
         return ""
 
 def save_extracted(client, text, original_path, original_metadata):
     if not text:
-        logger.warning(f"⚠️ Texte vide, ignoré : {original_path}")
+        logger.warning(f" Texte vide, ignoré : {original_path}")
         return None
 
     now      = datetime.now()
@@ -89,7 +89,7 @@ def save_extracted(client, text, original_path, original_metadata):
         content_type = "application/json"
     )
 
-    logger.info(f"✅ Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
+    logger.info(f" Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
     return object_path
 
 def get_metadata(client, object_path):
@@ -101,8 +101,15 @@ def get_metadata(client, object_path):
         return {}
 
 def run_file_ingestion(university="hassan2", faculty="FSAC"):
+  try:
+    info(
+            message=f"Début de l'extraction des fichiers - {faculty}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file"
+        )
     client = get_minio_client()
-    logger.info(f"🚀 Début extraction texte — {faculty}")
+    logger.info(f" Début extraction texte — {faculty}")
 
     objects = client.list_objects(
         SOURCE_BUCKET,
@@ -149,13 +156,17 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
                 stats["skipped"] += 1
 
         except Exception as e:
-            logger.error(f"❌ Erreur sur {path} : {e}")
+            logger.error(f" Erreur sur {path} : {e}")
             stats["errors"] += 1
 
         time.sleep(0.2)
-
+    info(
+            message=f"Extraction terminée - {faculty} | PDFs: {stats['pdf']} | DOCX: {stats['docx']} | Erreurs: {stats['errors']}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file")
     logger.info(f"""
-    ✅ Extraction terminée pour {faculty}
+     Extraction terminée pour {faculty}
     ─────────────────────────────────────
     PDFs extraits   : {stats['pdf']}
     DOCXs extraits  : {stats['docx']}
@@ -164,4 +175,13 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
     """)
 
     return stats
+  except Exception as e:
+        # LOG ERREUR 
+        error(
+            message=f"Erreur pendant l'extraction des fichiers : {str(e)}",
+            university=university,
+            faculty=faculty,
+            source="ingest_file"
+        )
+        raise
 
