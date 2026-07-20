@@ -13,6 +13,8 @@ MINIO_PASSWORD  = "password123"
 
 HUDI_TABLE_NAME = "course_catalog"
 HUDI_TABLE_PATH = "s3a://curated/course_catalog"
+HIVE_DATABASE   = "curated"
+HIVE_METASTORE_URI = "thrift://hive-metastore:9083"
 
 # Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
@@ -20,7 +22,7 @@ UNIVERSITY_ALIASES = {
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
 }
 
-# Mots-clés pour repérer les documents de formations (extensible si besoin)
+# Mots-clés pour repérer les documents de formations
 COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus"]
 
 
@@ -39,6 +41,9 @@ def get_spark_session():
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
+        # Nécessaire pour que Spark connaisse le Hive Metastore
+        .config("hive.metastore.uris", HIVE_METASTORE_URI)
+        .enableHiveSupport()
         .getOrCreate()
     )
 
@@ -149,7 +154,15 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
         "hoodie.upsert.shuffle.parallelism": "2",
         "hoodie.insert.shuffle.parallelism": "2",
-        "hoodie.datasource.hive_sync.enable": "false",
+        # --- Synchronisation Hive Metastore (corrigé : était à "false") ---
+        "hoodie.datasource.hive_sync.enable": "true",
+        "hoodie.datasource.hive_sync.mode": "hms",
+        "hoodie.datasource.hive_sync.metastore.uris": HIVE_METASTORE_URI,
+        "hoodie.datasource.hive_sync.database": HIVE_DATABASE,
+        "hoodie.datasource.hive_sync.table": table_name,
+        "hoodie.datasource.hive_sync.partition_fields": "university,faculty",
+        "hoodie.datasource.hive_sync.partition_extractor_class":
+            "org.apache.hudi.hive.MultiPartKeysValueExtractor",
     }
 
     df.write.format("hudi") \
@@ -191,4 +204,4 @@ def run_build_courses(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    run_build_courses(university="hassan2", faculty="FSAC")
+    run_build_courses(university="cadi_ayyad", faculty="FSTG")
