@@ -13,13 +13,17 @@ MINIO_PASSWORD  = "password123"
 
 HUDI_TABLE_NAME = "course_catalog"
 HUDI_TABLE_PATH = "s3a://curated/course_catalog"
+HIVE_DATABASE   = "curated"
+HIVE_METASTORE_URI = "thrift://hive-metastore:9083"
 
+# Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
     "hassan2": ["hassan2", "hassan_ii", "Hassan II", "hassan_2"],
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
 }
 
-COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus", "licence", "master", "doctorat", "module", "cours", "syllabus", "guide", "convention", "partenariat"]
+# Mots-clés pour repérer les documents de formations
+COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus"]
 
 
 def get_spark_session():
@@ -37,11 +41,18 @@ def get_spark_session():
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
+        # Nécessaire pour que Spark connaisse le Hive Metastore
+        .config("hive.metastore.uris", HIVE_METASTORE_URI)
+        .enableHiveSupport()
         .getOrCreate()
     )
 
 
 def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath=""):
+    """
+    Essaie plusieurs variantes du nom d'université pour trouver celle qui existe vraiment dans MinIO.
+    Évite le bug 'hassan2 vs hassan_ii vs Hassan II'.
+    """
     sc = spark.sparkContext
     hadoop_conf = sc._jsc.hadoopConfiguration()
     fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(
@@ -72,6 +83,7 @@ def find_existing_university_path(spark, university_hint, faculty, bucket="raw-j
 
 
 def read_extracted_text(spark, university, faculty):
+    """Lit tous les textes extraits des PDFs (depuis ingest_file.py)"""
     resolved_university, path = find_existing_university_path(
         spark, university, faculty, bucket="raw-json", subpath=""
     )
@@ -81,27 +93,22 @@ def read_extracted_text(spark, university, faculty):
 
 
 def normalize_course_catalog(df, university, faculty):
-    # Détecte si c'est le format ingest_file (source_path + extracted_text)
-    # ou le format ancien (metadata.source_url + text)
-    columns = df.columns
+    """Filtre les documents liés aux formations et construit le catalogue de cours"""
 
-    if "source_path" in columns:
-        with_path = df.withColumn("source_path_col", col("source_path")) \
-                      .withColumn("text_content", col("extracted_text"))
-    else:
-        with_path = df.withColumn("source_path_col", col("metadata.source_url")) \
-                      .withColumn("text_content", col("text"))
+    with_path = df.withColumn("source_path", col("metadata.source_url")) \
+                  .withColumn("text_content", col("text"))
 
+    # Construit dynamiquement le filtre OR à partir de COURSE_KEYWORDS
     keyword_filter = None
     for kw in COURSE_KEYWORDS:
-        cond = lower(col("text_content")).contains(kw)
+        cond = lower(col("source_path")).contains(kw)
         keyword_filter = cond if keyword_filter is None else (keyword_filter | cond)
 
     formations_only = with_path.filter(keyword_filter)
 
     normalized = formations_only.withColumn(
         "raw_filename",
-        regexp_extract(col("source_path_col"), r"([^/]+)\.pdf$", 1)
+        regexp_extract(col("source_path"), r"([^/]+)\.pdf$", 1)
     )
 
     normalized = normalized.withColumn(
@@ -118,7 +125,7 @@ def normalize_course_catalog(df, university, faculty):
     normalized = normalized.select(
         "course_name",
         "raw_filename",
-        col("source_path_col").alias("source_path"),
+        "source_path",
         "text_content"
     )
 
@@ -147,7 +154,15 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
         "hoodie.upsert.shuffle.parallelism": "2",
         "hoodie.insert.shuffle.parallelism": "2",
-        "hoodie.datasource.hive_sync.enable": "false",
+        # --- Synchronisation Hive Metastore (corrigé : était à "false") ---
+        "hoodie.datasource.hive_sync.enable": "true",
+        "hoodie.datasource.hive_sync.mode": "hms",
+        "hoodie.datasource.hive_sync.metastore.uris": HIVE_METASTORE_URI,
+        "hoodie.datasource.hive_sync.database": HIVE_DATABASE,
+        "hoodie.datasource.hive_sync.table": table_name,
+        "hoodie.datasource.hive_sync.partition_fields": "university,faculty",
+        "hoodie.datasource.hive_sync.partition_extractor_class":
+            "org.apache.hudi.hive.MultiPartKeysValueExtractor",
     }
 
     df.write.format("hudi") \
@@ -189,4 +204,4 @@ def run_build_courses(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    run_build_courses(university="cadi_ayyad", faculty="FSSM")
+    run_build_courses(university="cadi_ayyad", faculty="FSTG")
