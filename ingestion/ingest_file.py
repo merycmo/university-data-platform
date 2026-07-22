@@ -1,5 +1,3 @@
-# ingestion/ingest_file.py
-
 import hashlib
 import json
 import logging
@@ -10,7 +8,8 @@ from io import BytesIO
 import pdfplumber
 from docx import Document
 from minio import Minio
-from .ingest_logs import info, error
+from ingest_logs import info, error
+
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
@@ -56,7 +55,7 @@ def save_extracted(client, text, original_path, original_metadata):
         logger.warning(f" Texte vide, ignoré : {original_path}")
         return None
 
-    now      = datetime.now()
+    now        = datetime.now()
     checksum = hashlib.md5(text.encode()).hexdigest()
 
     object_path = original_path.replace(".pdf", ".json") \
@@ -100,83 +99,85 @@ def get_metadata(client, object_path):
     except:
         return {}
 
-def run_file_ingestion(university="hassan2", faculty="FSAC"):
-  try:
-    info(
+def run_file_ingestion(university="hassan_ii", faculty="FST"):
+    try:
+        info(
             message=f"Début de l'extraction des fichiers - {faculty}",
             university=university,
             faculty=faculty,
             source="ingest_file"
         )
-    client = get_minio_client()
-    logger.info(f" Début extraction texte — {faculty}")
+        client = get_minio_client()
+        logger.info(f" Début extraction texte — {faculty}")
 
-    objects = client.list_objects(
-        SOURCE_BUCKET,
-        prefix    = f"university={university}/faculty={faculty}/",
-        recursive = True
-    )
+        objects = client.list_objects(
+            SOURCE_BUCKET,
+            prefix    = f"university={university}/faculty={faculty}/",
+            recursive = True
+        )
 
-    stats = {
-        "pdf"    : 0,
-        "docx"   : 0,
-        "skipped": 0,
-        "errors" : 0
-    }
+        stats = {
+            "pdf"    : 0,
+            "docx"   : 0,
+            "skipped": 0,
+            "errors" : 0
+        }
 
-    for obj in objects:
-        path = obj.object_name
+        for obj in objects:
+            path = obj.object_name
 
-        if path.endswith(".meta.json"):
-            continue
-
-        try:
-            response = client.get_object(SOURCE_BUCKET, path)
-            content  = response.read()
-
-            if path.endswith(".pdf"):
-                text      = extract_text_pdf(content)
-                file_type = "pdf"
-
-            elif path.endswith((".docx", ".doc")):
-                text      = extract_text_docx(content)
-                file_type = "docx"
-
-            else:
-                stats["skipped"] += 1
+            if path.endswith(".meta.json"):
                 continue
 
-            metadata = get_metadata(client, path)
+            try:
+                response = client.get_object(SOURCE_BUCKET, path)
+                content  = response.read()
 
-            result = save_extracted(client, text, path, metadata)
+                if path.endswith(".pdf"):
+                    text      = extract_text_pdf(content)
+                    file_type = "pdf"
 
-            if result:
-                stats[file_type] += 1
-            else:
-                stats["skipped"] += 1
+                elif path.endswith((".docx", ".doc")):
+                    text      = extract_text_docx(content)
+                    file_type = "docx"
 
-        except Exception as e:
-            logger.error(f" Erreur sur {path} : {e}")
-            stats["errors"] += 1
+                else:
+                    stats["skipped"] += 1
+                    continue
 
-        time.sleep(0.2)
-    info(
+                metadata = get_metadata(client, path)
+
+                result = save_extracted(client, text, path, metadata)
+
+                if result:
+                    stats[file_type] += 1
+                else:
+                    stats["skipped"] += 1
+
+            except Exception as e:
+                logger.error(f" Erreur sur {path} : {e}")
+                stats["errors"] += 1
+
+            time.sleep(0.2)
+
+        info(
             message=f"Extraction terminée - {faculty} | PDFs: {stats['pdf']} | DOCX: {stats['docx']} | Erreurs: {stats['errors']}",
             university=university,
             faculty=faculty,
-            source="ingest_file")
-    logger.info(f"""
+            source="ingest_file"
+        )
+        logger.info(f"""
      Extraction terminée pour {faculty}
-    ─────────────────────────────────────
-    PDFs extraits   : {stats['pdf']}
-    DOCXs extraits  : {stats['docx']}
-    Ignorés         : {stats['skipped']}
-    Erreurs         : {stats['errors']}
-    """)
+     ─────────────────────────────────────
+     PDFs extraits   : {stats['pdf']}
+     DOCXs extraits  : {stats['docx']}
+     Ignorés         : {stats['skipped']}
+     Erreurs         : {stats['errors']}
+     """)
 
-    return stats
-  except Exception as e:
-        # LOG ERREUR 
+        return stats
+
+    except Exception as e:
         error(
             message=f"Erreur pendant l'extraction des fichiers : {str(e)}",
             university=university,
@@ -184,4 +185,3 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
             source="ingest_file"
         )
         raise
-
