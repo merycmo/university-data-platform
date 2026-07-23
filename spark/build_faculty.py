@@ -1,6 +1,7 @@
 # spark/build_faculty.py
 
 import logging
+import sys
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, current_timestamp, md5, concat_ws
 
@@ -25,7 +26,7 @@ UNIVERSITY_ALIASES = {
 def get_spark_session():
     return (
         SparkSession.builder
-        .appName("BuildCatalog")
+        .appName("BuildFacultyProfiles")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
@@ -166,4 +167,6 @@ def run_build_faculty(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    run_build_faculty(university="hassan_ii", faculty="FSAC")
+    university = sys.argv[1] if len(sys.argv) > 1 else "hassan2"
+    faculty    = sys.argv[2] if len(sys.argv) > 2 else "FSAC"
+    run_build_faculty(university=university, faculty=faculty)
