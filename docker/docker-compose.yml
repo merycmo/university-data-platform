@@ -176,8 +176,15 @@ services:
           --role Admin \
           --email admin@university.ma
     volumes:
-      - ../dags:/opt/airflow/dags
-      - airflow_logs:/opt/airflow/logs
+       - ../dags:/opt/airflow/dags
+       - ../scraper:/opt/airflow/dags/scraper
+       - ../ingestion:/opt/airflow/dags/ingestion
+       - ../spark:/opt/airflow/dags/spark
+       - ../hudi_hive:/opt/airflow/dags/hudi_hive
+       - ../search:/opt/airflow/dags/search
+       - airflow_logs:/opt/airflow/logs
+
+   
 
   # ─── Airflow Webserver ────────────────────────────────
   airflow-webserver:
@@ -193,7 +200,12 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
-      - ../dags:/opt/airflow/dags
+      - ../dags:/opt/airflow/dags 
+      - ../scraper:/opt/airflow/dags/scraper       
+      - ../ingestion:/opt/airflow/dags/ingestion    
+      - ../spark:/opt/airflow/dags/spark            
+      - ../hudi_hive:/opt/airflow/dags/hudi_hive    
+      - ../search:/opt/airflow/dags/search 
       - airflow_logs:/opt/airflow/logs
     command: webserver
     healthcheck:
@@ -214,8 +226,16 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
-      - ../dags:/opt/airflow/dags
-      - airflow_logs:/opt/airflow/logs
+       - ../dags:/opt/airflow/dags
+       - ../scraper:/opt/airflow/dags/scraper
+       - ../ingestion:/opt/airflow/dags/ingestion
+       - ../spark:/opt/airflow/dags/spark
+       - ../hudi_hive:/opt/airflow/dags/hudi_hive
+       - ../search:/opt/airflow/dags/search
+       - airflow_logs:/opt/airflow/logs
+
+    
+
     command: scheduler
 
 volumes:

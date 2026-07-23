@@ -1,3 +1,10 @@
+
+
+
+
+# scraper/test_fsbm.py
+import sys
+
 from scraper.university_scraper import scrape_university
 
 scrape_university(
@@ -6,3 +13,17 @@ scrape_university(
     faculty    = "FLSH",
     max_depth  = 3
 )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
