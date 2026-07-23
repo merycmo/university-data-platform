@@ -1,7 +1,6 @@
 # spark/build_faculty.py
 
 import logging
-import sys
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, current_timestamp, md5, concat_ws
 
@@ -18,7 +17,6 @@ HIVE_DATABASE   = "university"
 
 UNIVERSITY_ALIASES = {
     "hassan2": ["hassan2", "hassan_ii", "Hassan II", "hassan_2"],
-    "hassan_ii": ["hassan_ii", "hassan2", "Hassan II", "hassan_2"],
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
 }
 
@@ -112,6 +110,7 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.hive_style_partitioning": "true",
         "hoodie.datasource.write.operation": "upsert",
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
+        "hoodie.datasource.write.schema.allow.auto.evolution.enable": "true",
         "hoodie.datasource.hive_sync.enable": "false",
     }
 
@@ -136,7 +135,7 @@ def register_table_in_hive(spark, table_name, table_path):
     logger.info(f"✅ Table enregistrée dans Hive : {HIVE_DATABASE}.{table_name}")
 
 
-def run_build_faculty(university="hassan2", faculty="FSAC"):
+def run_build_faculty(university="cadi_ayyad", faculty="FSSM"):
     logger.info(f"🚀 Build faculty_profiles : {faculty} — {university}")
 
     spark = get_spark_session()
@@ -167,6 +166,4 @@ def run_build_faculty(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    university = sys.argv[1] if len(sys.argv) > 1 else "hassan2"
-    faculty    = sys.argv[2] if len(sys.argv) > 2 else "FSAC"
-    run_build_faculty(university=university, faculty=faculty)
+    run_build_faculty(university="cadi_ayyad", faculty="FSSM")
