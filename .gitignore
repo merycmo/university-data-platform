@@ -16,3 +16,5 @@ Thumbs.db
 # Docker data (très important pour ne pas uploader vos bases de données)
 docker/data/
 *.json
+*.jar
+check_*.py
