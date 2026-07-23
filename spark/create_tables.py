@@ -1,4 +1,4 @@
-# hudi_hive/create_tables.py
+# spark/create_tables.py
 
 from pyspark.sql import SparkSession
 import logging
@@ -39,34 +39,34 @@ def get_spark_session():
         .getOrCreate()
     )
 
-def register_faculty_profiles(spark):
-    logger.info("🚀 Enregistrement table faculty_profiles dans Hive")
+def register_tables(spark):
+    logger.info("🚀 Création base de données university")
     spark.sql("CREATE DATABASE IF NOT EXISTS university")
+
+    logger.info("🚀 Lecture faculty_profiles depuis MinIO")
+    df_faculty = spark.read.format("hudi").load("s3a://curated/faculty_profiles/")
+    df_faculty.createOrReplaceTempView("faculty_profiles_view")
     spark.sql("""
         CREATE TABLE IF NOT EXISTS university.faculty_profiles
         USING hudi
-        LOCATION 's3a://curated/faculty_profiles/'
         TBLPROPERTIES (
-            'hoodie.table.name' = 'faculty_profiles',
-            'hoodie.datasource.write.recordkey.field' = 'record_id',
-            'hoodie.datasource.write.precombine.field' = 'crawl_timestamp'
+            'hoodie.table.name' = 'faculty_profiles'
         )
+        AS SELECT * FROM faculty_profiles_view WHERE 1=0
     """)
     count = spark.sql("SELECT COUNT(*) FROM university.faculty_profiles").collect()[0][0]
     logger.info(f"✅ faculty_profiles enregistrée — {count} records")
 
-def register_course_catalog(spark):
-    logger.info("🚀 Enregistrement table course_catalog dans Hive")
-    spark.sql("CREATE DATABASE IF NOT EXISTS university")
+    logger.info("🚀 Lecture course_catalog depuis MinIO")
+    df_courses = spark.read.format("hudi").load("s3a://curated/course_catalog/")
+    df_courses.createOrReplaceTempView("course_catalog_view")
     spark.sql("""
         CREATE TABLE IF NOT EXISTS university.course_catalog
         USING hudi
-        LOCATION 's3a://curated/course_catalog/'
         TBLPROPERTIES (
-            'hoodie.table.name' = 'course_catalog',
-            'hoodie.datasource.write.recordkey.field' = 'record_id',
-            'hoodie.datasource.write.precombine.field' = 'crawl_timestamp'
+            'hoodie.table.name' = 'course_catalog'
         )
+        AS SELECT * FROM course_catalog_view WHERE 1=0
     """)
     count = spark.sql("SELECT COUNT(*) FROM university.course_catalog").collect()[0][0]
     logger.info(f"✅ course_catalog enregistrée — {count} records")
@@ -76,12 +76,9 @@ def run_hive_sync():
     spark = get_spark_session()
     spark.sparkContext.setLogLevel("WARN")
     try:
-        register_faculty_profiles(spark)
-        register_course_catalog(spark)
+        register_tables(spark)
         logger.info("✅ Synchronisation Hive terminée")
-        logger.info("📊 Aperçu faculty_profiles :")
         spark.sql("SELECT * FROM university.faculty_profiles LIMIT 5").show(truncate=False)
-        logger.info("📊 Aperçu course_catalog :")
         spark.sql("SELECT * FROM university.course_catalog LIMIT 5").show(truncate=False)
     finally:
         spark.stop()

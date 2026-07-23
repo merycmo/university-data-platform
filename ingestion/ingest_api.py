@@ -7,7 +7,7 @@ from io import BytesIO
 import hashlib
 import logging
 import schedule
-from ingest_logs import info, error
+from .ingest_logs import info, error
 # ============================================
 # CONFIGURATION
 # ============================================
