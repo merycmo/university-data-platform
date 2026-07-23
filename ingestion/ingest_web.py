@@ -10,7 +10,7 @@ from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from minio import Minio
 from io import BytesIO
-from ingest_logs import info, error
+from .ingest_logs import info, error
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"

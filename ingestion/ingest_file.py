@@ -10,7 +10,7 @@ from io import BytesIO
 import pdfplumber
 from docx import Document
 from minio import Minio
-from ingest_logs import info, error
+from .ingest_logs import info, error
 MINIO_HOST     = "localhost:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
