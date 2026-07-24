@@ -214,4 +214,4 @@ def run_build_courses(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    run_build_courses(university="Cadi Ayyad", faculty="FSTG")
+ run_build_courses(university="hassan2", faculty="FSAC")
