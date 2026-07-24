@@ -13,8 +13,9 @@ MINIO_PASSWORD  = "password123"
 
 HUDI_TABLE_NAME = "faculty_profiles"
 HUDI_TABLE_PATH = "s3a://curated/faculty_profiles"
-HIVE_DATABASE   = "university"
+HIVE_DATABASE   = "curated"
 
+# Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
     "hassan2": ["hassan2", "hassan_ii", "Hassan II", "hassan_2"],
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
@@ -27,6 +28,7 @@ def get_spark_session():
         .appName("BuildFacultyProfiles")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
+        # --- CONFIGURATIONS S3A / MINIO ---
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
         .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key", MINIO_USER)
@@ -110,10 +112,14 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.hive_style_partitioning": "true",
         "hoodie.datasource.write.operation": "upsert",
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
+        
+        # --- ACTIVATION DE L'ÉVOLUTION DE SCHEMA POUR ÉVITER LES ERREURS ---
         "hoodie.datasource.write.schema.allow.auto.evolution.enable": "true",
+        
+        # --- SYNCHRONISATION HIVE METASTORE (Désactivée à l'écriture) ---
         "hoodie.datasource.hive_sync.enable": "false",
     }
-
+    
     df.write.format("hudi") \
         .options(**hudi_options) \
         .mode("append") \
@@ -121,8 +127,10 @@ def write_to_hudi(df, table_name, table_path):
 
 
 def register_table_in_hive(spark, table_name, table_path):
+    """Enregistre ou met à jour la table Hudi dans le metastore Hive via Spark SQL"""
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {HIVE_DATABASE}")
     spark.sql(f"DROP TABLE IF EXISTS {HIVE_DATABASE}.{table_name}")
+    
     spark.sql(f"""
         CREATE TABLE {HIVE_DATABASE}.{table_name}
         USING hudi
@@ -132,10 +140,10 @@ def register_table_in_hive(spark, table_name, table_path):
         )
         LOCATION '{table_path}'
     """)
-    logger.info(f"✅ Table enregistrée dans Hive : {HIVE_DATABASE}.{table_name}")
+    logger.info(f"✅ Table enregistrée dans le metastore Hive sous : {HIVE_DATABASE}.{table_name}")
 
 
-def run_build_faculty(university="cadi_ayyad", faculty="FSSM"):
+def run_build_faculty(university="hassan_ii", faculty="FST"):
     logger.info(f"🚀 Build faculty_profiles : {faculty} — {university}")
 
     spark = get_spark_session()
@@ -154,10 +162,12 @@ def run_build_faculty(university="cadi_ayyad", faculty="FSSM"):
         count_clean = df_clean.count()
         logger.info(f"✨ {count_clean} profils normalisés")
 
+        # 1. Écriture dans MinIO au format Hudi
         write_to_hudi(df_clean, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
-        logger.info(f"✅ Table Hudi '{HUDI_TABLE_NAME}' mise à jour dans MinIO")
+        logger.info(f"✅ Table Hudi '{HUDI_TABLE_NAME}' mise à jour avec succès dans MinIO")
 
-        register_table_in_hive(spark, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
+        # 2. Enregistrement de la table dans le Metastore Hive
+        #register_table_in_hive(spark, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
 
         df_clean.select("full_name", "works_count", "cited_by_count", "faculty").show(10, truncate=False)
 
