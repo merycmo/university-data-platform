@@ -6,14 +6,10 @@ import json
 import logging
 import hashlib
 from datetime import datetime
-from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────
 ES_HOST        = "localhost"
 ES_PORT        = 9200
 MINIO_HOST     = "localhost:9000"
@@ -21,9 +17,6 @@ MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
 INDEX_NAME     = "university_content"
 
-# ─────────────────────────────────────────
-# Connexions
-# ─────────────────────────────────────────
 def get_es_client():
     return Elasticsearch(
         host=ES_HOST,
@@ -39,9 +32,6 @@ def get_minio_client():
         secure=False
     )
 
-# ─────────────────────────────────────────
-# Créer l'index si il n'existe pas
-# ─────────────────────────────────────────
 def create_index(es):
     if es.indices.exists(index=INDEX_NAME):
         logger.info(f"✅ Index {INDEX_NAME} existe déjà")
@@ -53,44 +43,56 @@ def create_index(es):
     es.indices.create(index=INDEX_NAME, body=mapping)
     logger.info(f"✅ Index {INDEX_NAME} créé")
 
-# ─────────────────────────────────────────
-# Lire les fichiers depuis MinIO
-# ─────────────────────────────────────────
 def list_minio_objects(client, bucket, university, faculty):
     prefix = f"university={university}/faculty={faculty}/"
     objects = client.list_objects(bucket, prefix=prefix, recursive=True)
     return [obj.object_name for obj in objects
             if not obj.object_name.endswith(".meta.json")]
 
-# ─────────────────────────────────────────
-# Indexer un document
-# ─────────────────────────────────────────
-def index_document(es, doc_id, document):
-    es.index(
-        index    = INDEX_NAME,
-        id       = doc_id,
-        document = document
-    )
-
-# ─────────────────────────────────────────
-# FONCTION PRINCIPALE
-# ─────────────────────────────────────────
 def index_to_elasticsearch(university, faculty):
-
     logger.info(f"🚀 Indexation ES : {faculty} — {university}")
 
-    es     = get_es_client()
-    minio  = get_minio_client()
+    es    = get_es_client()
+    minio = get_minio_client()
 
     create_index(es)
 
     indexed = 0
     errors  = 0
 
-    # Indexer les HTML
-    html_objects = list_minio_objects(
-        minio, "raw-web-html", university, faculty
-    )
+    # Indexer les JSONs (auteurs + publications OpenAlex)
+    json_objects = list_minio_objects(minio, "raw-json", university, faculty)
+
+    for obj_name in json_objects:
+        try:
+            response = minio.get_object("raw-json", obj_name)
+            content  = response.read().decode("utf-8", errors="ignore")
+
+            try:
+                data = json.loads(content)
+            except:
+                data = {"raw": content[:10000]}
+
+            doc_id   = hashlib.md5(obj_name.encode()).hexdigest()
+            document = {
+                "record_id"       : doc_id,
+                "content"         : json.dumps(data)[:10000],
+                "university"      : university,
+                "faculty"         : faculty,
+                "file_type"       : "json",
+                "storage_path"    : f"s3://raw-json/{obj_name}",
+                "crawl_timestamp" : datetime.now().isoformat()
+            }
+
+            es.index(index=INDEX_NAME, id=doc_id, document=document)
+            indexed += 1
+
+        except Exception as e:
+            logger.error(f"❌ Erreur {obj_name} : {e}")
+            errors += 1
+
+    # Indexer les HTMLs
+    html_objects = list_minio_objects(minio, "raw-web-html", university, faculty)
 
     for obj_name in html_objects:
         try:
@@ -107,3 +109,25 @@ def index_to_elasticsearch(university, faculty):
                 "storage_path"    : f"s3://raw-web-html/{obj_name}",
                 "crawl_timestamp" : datetime.now().isoformat()
             }
+
+            es.index(index=INDEX_NAME, id=doc_id, document=document)
+            indexed += 1
+
+        except Exception as e:
+            logger.error(f"❌ Erreur {obj_name} : {e}")
+            errors += 1
+
+    logger.info(f"""
+    ✅ Indexation ES terminée pour {faculty}
+    ─────────────────────────────────────
+    Indexés : {indexed}
+    Erreurs  : {errors}
+    """)
+
+    return {"indexed": indexed, "errors": errors}
+
+if __name__ == "__main__":
+    index_to_elasticsearch(
+        university = "cadi_ayyad",
+        faculty    = "FSSM"
+    )
