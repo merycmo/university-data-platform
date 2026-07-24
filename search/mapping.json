@@ -1,32 +1,41 @@
 {
-  "settings": {
-    "number_of_shards": 1,
-    "number_of_replicas": 0,
-    "analysis": {
-      "analyzer": {
-        "arabic_analyzer": {
-          "type": "arabic"
-        },
-        "french_analyzer": {
-          "type": "french"
-        }
+  "course_catalog": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "record_id": { "type": "keyword" },
+        "course_name": { "type": "text", "analyzer": "standard", "fields": { "keyword": { "type": "keyword" } } },
+        "text_content": { "type": "text", "analyzer": "standard" },
+        "university": { "type": "keyword" },
+        "faculty": { "type": "keyword" },
+        "language": { "type": "keyword" },
+        "is_deleted": { "type": "boolean" },
+        "business_timestamp": { "type": "date" }
       }
     }
   },
-  "mappings": {
-    "properties": {
-      "record_id"        : { "type": "keyword" },
-      "title"            : { "type": "text", "analyzer": "french" },
-      "content"          : { "type": "text", "analyzer": "french" },
-      "university"       : { "type": "keyword" },
-      "faculty"          : { "type": "keyword" },
-      "file_type"        : { "type": "keyword" },
-      "language"         : { "type": "keyword" },
-      "source_url"       : { "type": "keyword" },
-      "depth_level"      : { "type": "integer" },
-      "crawl_timestamp"  : { "type": "date" },
-      "content_checksum" : { "type": "keyword" },
-      "storage_path"     : { "type": "keyword" }
+  "faculty_profiles": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "record_id": { "type": "keyword" },
+        "full_name": { "type": "text", "analyzer": "standard", "fields": { "keyword": { "type": "keyword" } } },
+        "orcid": { "type": "keyword" },
+        "works_count": { "type": "integer" },
+        "cited_by_count": { "type": "integer" },
+        "institution_name": { "type": "text", "analyzer": "standard", "fields": { "keyword": { "type": "keyword" } } },
+        "university": { "type": "keyword" },
+        "faculty": { "type": "keyword" },
+        "language": { "type": "keyword" },
+        "is_deleted": { "type": "boolean" },
+        "business_timestamp": { "type": "date" }
+      }
     }
   }
 }
