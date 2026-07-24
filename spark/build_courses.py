@@ -1,3 +1,5 @@
+# spark/build_courses.py
+
 import logging
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, current_timestamp, md5, concat_ws, regexp_extract, lower, when, length, trim
@@ -12,7 +14,6 @@ MINIO_PASSWORD  = "password123"
 HUDI_TABLE_NAME = "course_catalog"
 HUDI_TABLE_PATH = "s3a://curated/course_catalog"
 HIVE_DATABASE   = "curated"
-HIVE_METASTORE_URI = "thrift://university_hive:9083"
 
 # Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
@@ -27,11 +28,9 @@ COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus", "l
 def get_spark_session():
     return (
         SparkSession.builder
-        .appName("BuildCatalog")
+        .appName("BuildCourseCatalog")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        .config("hive.metastore.uris", "thrift://university_hive:9083")
         # --- CONFIGURATIONS S3A / MINIO ---
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
         .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
@@ -39,9 +38,11 @@ def get_spark_session():
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_PASSWORD)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
         .enableHiveSupport()
         .getOrCreate()
     )
+
 
 def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath=""):
     """
@@ -85,18 +86,17 @@ def read_extracted_text(spark, university, faculty):
     df = spark.read.option("multiLine", "true").option("recursiveFileLookup", "true").json(path)
     return df, resolved_university
 
+
 def normalize_course_catalog(df, university, faculty):
     """Filtre les documents liés aux formations et construit le catalogue de cours"""
 
-    # Utilise display_name comme source_path principal, et title comme texte
     with_path = df.withColumn("source_path", col("display_name")) \
                   .withColumn("text_content", col("title"))
 
-    # Construit un filtre robuste sur les colonnes textuelles
     keyword_filter = None
     for kw in COURSE_KEYWORDS:
         cond = (
-            lower(col("source_path")).contains(kw) | 
+            lower(col("source_path")).contains(kw) |
             lower(col("text_content")).contains(kw) |
             lower(col("display_name")).contains(kw) |
             lower(col("title")).contains(kw)
@@ -104,10 +104,9 @@ def normalize_course_catalog(df, university, faculty):
         keyword_filter = cond if keyword_filter is None else (keyword_filter | cond)
 
     formations_only = with_path.filter(keyword_filter)
-    
-    # Fallback de sécurité : si le filtrage par mot-clé renvoie 0 ligne, on prend tout le dataset pour ne pas bloquer le pipeline
+
     if formations_only.count() == 0:
-        logger.warning("⚠️ Aucun document ne correspond aux mots-clés COURSE_KEYWORDS. Activation du mode Fallback (utilisation de tous les documents bruts).")
+        logger.warning("⚠️ Aucun document ne correspond aux mots-clés COURSE_KEYWORDS. Activation du mode Fallback.")
         formations_only = with_path
 
     normalized = formations_only.withColumn(
@@ -120,7 +119,6 @@ def normalize_course_catalog(df, university, faculty):
         regexp_extract(col("raw_filename"), r"(?:Fili[eè]re[s]?_?)(.*)", 1)
     )
 
-    # Si le nom de fichier ne matche pas l'expression régulière, on utilise display_name ou title
     normalized = normalized.withColumn(
         "course_name",
         when((length(trim(col("course_name"))) > 0), col("course_name"))
@@ -158,9 +156,11 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.hive_style_partitioning": "true",
         "hoodie.datasource.write.operation": "upsert",
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
-        "hoodie.upsert.shuffle.parallelism": "2",
-        "hoodie.insert.shuffle.parallelism": "2",
-        # --- Désactivation temporaire de la synchro Hive pour éviter l'erreur de connexion ---
+
+        # --- ACTIVATION DE L'ÉVOLUTION DE SCHEMA POUR ÉVITER LES ERREURS ---
+        "hoodie.datasource.write.schema.allow.auto.evolution.enable": "true",
+
+        # --- SYNCHRONISATION HIVE METASTORE (Désactivée à l'écriture) ---
         "hoodie.datasource.hive_sync.enable": "false",
     }
 
@@ -168,6 +168,23 @@ def write_to_hudi(df, table_name, table_path):
         .options(**hudi_options) \
         .mode("append") \
         .save(table_path)
+
+
+def register_table_in_hive(spark, table_name, table_path):
+    """Enregistre ou met à jour la table Hudi dans le metastore Hive via Spark SQL"""
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {HIVE_DATABASE}")
+    spark.sql(f"DROP TABLE IF EXISTS {HIVE_DATABASE}.{table_name}")
+
+    spark.sql(f"""
+        CREATE TABLE {HIVE_DATABASE}.{table_name}
+        USING hudi
+        OPTIONS (
+            primaryKey 'record_id',
+            preCombineField 'business_timestamp'
+        )
+        LOCATION '{table_path}'
+    """)
+    logger.info(f"✅ Table enregistrée dans le metastore Hive sous : {HIVE_DATABASE}.{table_name}")
 
 
 def run_build_courses(university="hassan_ii", faculty="FST"):
@@ -193,8 +210,12 @@ def run_build_courses(university="hassan_ii", faculty="FST"):
             logger.warning("⚠️ Aucun cours trouvé après nettoyage.")
             return
 
+        # 1. Écriture dans MinIO au format Hudi
         write_to_hudi(df_clean, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
-        logger.info(f"✅ Table Hudi '{HUDI_TABLE_NAME}' mise à jour avec succès")
+        logger.info(f"✅ Table Hudi '{HUDI_TABLE_NAME}' mise à jour avec succès dans MinIO")
+
+        # 2. Enregistrement de la table dans le Metastore Hive
+        register_table_in_hive(spark, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
 
         df_clean.select("course_name", "raw_filename", "faculty").show(20, truncate=False)
 

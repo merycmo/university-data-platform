@@ -25,7 +25,7 @@ UNIVERSITY_ALIASES = {
 def get_spark_session():
     return (
         SparkSession.builder
-        .appName("BuildCatalog")
+        .appName("BuildFacultyProfiles")
         .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
         # --- CONFIGURATIONS S3A / MINIO ---
@@ -42,10 +42,6 @@ def get_spark_session():
 
 
 def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath="type=authors"):
-    """
-    Essaie plusieurs variantes du nom d'université pour trouver celle qui existe vraiment dans MinIO.
-    Évite le bug 'hassan2 vs hassan_ii vs Hassan II'.
-    """
     sc = spark.sparkContext
     hadoop_conf = sc._jsc.hadoopConfiguration()
     fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(
@@ -117,7 +113,10 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.operation": "upsert",
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
         
-        # --- SYNCHRONISATION HIVE METASTORE (Désactivée à l'écriture pour éviter l'échec Thrift) ---
+        # --- ACTIVATION DE L'ÉVOLUTION DE SCHEMA POUR ÉVITER LES ERREURS ---
+        "hoodie.datasource.write.schema.allow.auto.evolution.enable": "true",
+        
+        # --- SYNCHRONISATION HIVE METASTORE (Désactivée à l'écriture) ---
         "hoodie.datasource.hive_sync.enable": "false",
     }
     
@@ -144,7 +143,7 @@ def register_table_in_hive(spark, table_name, table_path):
     logger.info(f"✅ Table enregistrée dans le metastore Hive sous : {HIVE_DATABASE}.{table_name}")
 
 
-def run_build_faculty(university="hassan2", faculty="FSAC"):
+def run_build_faculty(university="hassan_ii", faculty="FST"):
     logger.info(f"🚀 Build faculty_profiles : {faculty} — {university}")
 
     spark = get_spark_session()
