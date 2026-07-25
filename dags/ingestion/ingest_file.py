@@ -89,7 +89,7 @@ def save_extracted(client, text, original_path, original_metadata):
         content_type = "application/json"
     )
 
-    logger.info(f"✅ Texte extrait : {original_path} → {TARGET_BUCKET}/{object_path}")
+    logger.info(f"✅ Texte extrait : {original_path}")
     return object_path
 
 def get_metadata(client, object_path):
@@ -100,7 +100,7 @@ def get_metadata(client, object_path):
     except:
         return {}
 
-def run_file_ingestion(university="hassan2", faculty="FSAC"):
+def run_file_ingestion(university="cadi_ayyad", faculty="FSSM"):
     client = get_minio_client()
     logger.info(f"🚀 Début extraction texte — {faculty}")
 
@@ -130,18 +130,15 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
             if path.endswith(".pdf"):
                 text      = extract_text_pdf(content)
                 file_type = "pdf"
-
             elif path.endswith((".docx", ".doc")):
                 text      = extract_text_docx(content)
                 file_type = "docx"
-
             else:
                 stats["skipped"] += 1
                 continue
 
             metadata = get_metadata(client, path)
-
-            result = save_extracted(client, text, path, metadata)
+            result   = save_extracted(client, text, path, metadata)
 
             if result:
                 stats[file_type] += 1
@@ -156,7 +153,6 @@ def run_file_ingestion(university="hassan2", faculty="FSAC"):
 
     logger.info(f"""
     ✅ Extraction terminée pour {faculty}
-    ─────────────────────────────────────
     PDFs extraits   : {stats['pdf']}
     DOCXs extraits  : {stats['docx']}
     Ignorés         : {stats['skipped']}

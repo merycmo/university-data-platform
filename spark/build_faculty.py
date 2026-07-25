@@ -12,8 +12,8 @@ MINIO_USER      = "admin"
 MINIO_PASSWORD  = "password123"
 
 HUDI_TABLE_NAME = "faculty_profiles"
-HUDI_TABLE_PATH = "s3a://curated/faculty_profiles"
 HIVE_DATABASE   = "curated"
+HUDI_TABLE_PATH = f"s3a://curated/{HIVE_DATABASE}.db/{HUDI_TABLE_NAME}"
 
 # Variantes possibles de noms d'université à essayer automatiquement
 UNIVERSITY_ALIASES = {
@@ -127,22 +127,17 @@ def write_to_hudi(df, table_name, table_path):
 
 
 def register_table_in_hive(spark, table_name, table_path):
-    """Enregistre ou met à jour la table Hudi dans le metastore Hive via Spark SQL"""
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {HIVE_DATABASE}")
+
     spark.sql(f"DROP TABLE IF EXISTS {HIVE_DATABASE}.{table_name}")
-    
+
     spark.sql(f"""
         CREATE TABLE {HIVE_DATABASE}.{table_name}
         USING hudi
-        OPTIONS (
-            primaryKey 'record_id',
-            preCombineField 'business_timestamp'
-        )
         LOCATION '{table_path}'
     """)
-    logger.info(f"✅ Table enregistrée dans le metastore Hive sous : {HIVE_DATABASE}.{table_name}")
 
-
+    logger.info(f"✅ Table enregistrée : {HIVE_DATABASE}.{table_name}")
 def run_build_faculty(university="hassan_ii", faculty="FST"):
     logger.info(f"🚀 Build faculty_profiles : {faculty} — {university}")
 

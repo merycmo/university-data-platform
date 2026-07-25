@@ -66,6 +66,20 @@ services:
       - spark-master
     volumes:
       - ../spark:/opt/spark-apps
+# ─── Hive Jars Init ───────────────────────────────────
+  hive-jars-init:
+    image: curlimages/curl:latest
+    container_name: university_hive_jars_init
+    user: "0:0"
+    volumes:
+      - hive_auxlib:/auxlib
+    entrypoint: >
+      /bin/sh -c "
+      curl -L -o /auxlib/hadoop-aws-3.3.4.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar;
+      curl -L -o /auxlib/aws-java-sdk-bundle-1.12.262.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar;
+      ls -l /auxlib;
+      echo 'Jars téléchargés';
+      "
 
   # ─── PostgreSQL pour Hive ─────────────────────────────
   postgres:
@@ -83,26 +97,35 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── Hive Metastore ───────────────────────────────────
+    # ─── Hive Metastore ───────────────────────────────────
   hive-metastore:
     image: apache/hive:3.1.3
     container_name: university_hive
+
     depends_on:
       postgres:
         condition: service_healthy
+      hive-jars-init:
+        condition: service_completed_successfully
+
     ports:
       - "9083:9083"
+
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
       SKIP_SCHEMA_INIT: "true"
+      HIVE_AUX_JARS_PATH: /opt/hive/auxlib
+
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore
         -Djavax.jdo.option.ConnectionUserName=hive
         -Djavax.jdo.option.ConnectionPassword=hive123
+
     volumes:
       - hive_data:/opt/hive/data
+      - hive_auxlib:/opt/hive/auxlib
 
   # ─── Elasticsearch ────────────────────────────────────
   elasticsearch:
@@ -136,7 +159,7 @@ services:
     volumes:
       - metabase_data:/metabase-data
 
-  # ─── PostgreSQL pour Airflow ──────────────────────────
+    # ─── PostgreSQL pour Airflow ──────────────────────────
   postgres-airflow:
     image: postgres:13
     container_name: university_postgres_airflow
@@ -222,6 +245,7 @@ volumes:
   minio_data:
   postgres_data:
   hive_data:
+  hive_auxlib:
   es_data:
   metabase_data:
   postgres_airflow_data:

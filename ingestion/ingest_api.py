@@ -14,7 +14,7 @@ import schedule
 BASE_URL = "https://api.openalex.org"
 HEADERS = {"User-Agent": "mailto:salmaaouzale@gmail.com"}
 
-MINIO_HOST     = "localhost:9000"
+MINIO_HOST     = "minio:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
 MINIO_BUCKET   = "raw-json"
