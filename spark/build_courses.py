@@ -1,6 +1,6 @@
 import logging
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit, current_timestamp, md5, concat_ws, regexp_extract, lower, when, length, trim
+from pyspark.sql.functions import col, lit, current_timestamp, md5, concat_ws, regexp_extract, regexp_replace, lower, when, length, trim
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,40 +12,53 @@ MINIO_PASSWORD  = "password123"
 HUDI_TABLE_NAME = "course_catalog"
 HUDI_TABLE_PATH = "s3a://curated/course_catalog"
 HIVE_DATABASE   = "curated"
-HIVE_METASTORE_URI = "thrift://university_hive:9083"
+HIVE_METASTORE_URI = "thrift://hive-metastore:9083"
 
-# Variantes possibles de noms d'université à essayer automatiquement
+COURSE_SUBPATH = ""
+
 UNIVERSITY_ALIASES = {
     "hassan2": ["hassan2", "hassan_ii", "Hassan II", "hassan_2"],
     "cadi_ayyad": ["cadi_ayyad", "Cadi Ayyad", "cadiayyad", "caddi_ayad", "kaddi_ayad"],
 }
 
-# Mots-clés pour repérer les documents de formations
-COURSE_KEYWORDS = ["formation", "filiere", "filière", "programme", "cursus", "licence", "master", "genie", "génie"]
+COURSE_KEYWORDS = [
+    "formation", "filiere", "filière", "programme", "cursus",
+    "master", "licence", "diplome", "diplôme",
+    "ingenieur", "ingénieur"
+]
+
+COURSE_EXCLUDE_KEYWORDS = [
+    "convention", "liste", "emploi", "calendrier", "planning", "informationsutiles",
+    "reglement", "règlement", "proces", "procès", "pv-", "attestation"
+]
 
 
 def get_spark_session():
     return (
         SparkSession.builder
-        .appName("BuildCatalog")
-        .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        .config("hive.metastore.uris", "thrift://university_hive:9083")
-        # --- CONFIGURATIONS S3A / MINIO ---
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .appName("BuildCourseCatalog")
         .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
         .config("spark.hadoop.fs.s3a.access.key", MINIO_USER)
         .config("spark.hadoop.fs.s3a.secret.key", MINIO_PASSWORD)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
+        .config("hive.metastore.uris", HIVE_METASTORE_URI)
         .enableHiveSupport()
         .getOrCreate()
     )
 
-def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath=""):
+
+def find_existing_university_path(spark, university_hint, faculty, bucket="raw-json", subpath=COURSE_SUBPATH):
     """
     Essaie plusieurs variantes du nom d'université pour trouver celle qui existe vraiment dans MinIO.
+    Évite le bug 'hassan2 vs hassan_ii vs Hassan II'.
+    Aligné sur la version faculty_profiles (même logique, même comportement de chemin).
     """
     sc = spark.sparkContext
     hadoop_conf = sc._jsc.hadoopConfiguration()
@@ -63,7 +76,7 @@ def find_existing_university_path(spark, university_hint, faculty, bucket="raw-j
     ))
 
     for candidate in candidates:
-        path_str = f"university={candidate}/faculty={faculty}/{subpath}"
+        path_str = f"university={candidate}/faculty={faculty}/{subpath}/"
         hadoop_path = sc._jvm.org.apache.hadoop.fs.Path(f"s3a://{bucket}/{path_str}")
         try:
             if fs.exists(hadoop_path):
@@ -73,42 +86,41 @@ def find_existing_university_path(spark, university_hint, faculty, bucket="raw-j
             continue
 
     logger.warning(f"⚠️ Aucune variante trouvée pour '{university_hint}'. Essayé : {candidates}")
-    return university_hint, f"s3a://{bucket}/university={university_hint}/faculty={faculty}/{subpath}"
+    return university_hint, f"s3a://{bucket}/university={university_hint}/faculty={faculty}/{subpath}/"
 
 
 def read_extracted_text(spark, university, faculty):
-    """Lit tous les documents depuis raw-json"""
+    """Lit tous les textes extraits des PDFs (depuis ingest_file.py)"""
     resolved_university, path = find_existing_university_path(
-        spark, university, faculty, bucket="raw-json", subpath=""
+        spark, university, faculty, bucket="raw-json", subpath=COURSE_SUBPATH
     )
     logger.info(f"📖 Lecture MinIO : {path}")
     df = spark.read.option("multiLine", "true").option("recursiveFileLookup", "true").json(path)
     return df, resolved_university
 
+
 def normalize_course_catalog(df, university, faculty):
     """Filtre les documents liés aux formations et construit le catalogue de cours"""
 
-    # Utilise display_name comme source_path principal, et title comme texte
-    with_path = df.withColumn("source_path", col("display_name")) \
-                  .withColumn("text_content", col("title"))
+    with_path = df.withColumn("source_path", col("metadata.source_url")) \
+                  .withColumn("text_content", col("text"))
 
-    # Construit un filtre robuste sur les colonnes textuelles
-    keyword_filter = None
+    path_filter = None
+    text_filter = None
     for kw in COURSE_KEYWORDS:
-        cond = (
-            lower(col("source_path")).contains(kw) | 
-            lower(col("text_content")).contains(kw) |
-            lower(col("display_name")).contains(kw) |
-            lower(col("title")).contains(kw)
-        )
-        keyword_filter = cond if keyword_filter is None else (keyword_filter | cond)
+        p_cond = lower(col("source_path")).contains(kw)
+        t_cond = lower(col("text_content")).contains(kw)
+        path_filter = p_cond if path_filter is None else (path_filter | p_cond)
+        text_filter = t_cond if text_filter is None else (text_filter | t_cond)
 
-    formations_only = with_path.filter(keyword_filter)
-    
-    # Fallback de sécurité : si le filtrage par mot-clé renvoie 0 ligne, on prend tout le dataset pour ne pas bloquer le pipeline
-    if formations_only.count() == 0:
-        logger.warning("⚠️ Aucun document ne correspond aux mots-clés COURSE_KEYWORDS. Activation du mode Fallback (utilisation de tous les documents bruts).")
-        formations_only = with_path
+    formations_only = with_path.filter(path_filter | text_filter)
+
+    exclude_filter = None
+    for kw in COURSE_EXCLUDE_KEYWORDS:
+        cond = lower(col("source_path")).contains(kw)
+        exclude_filter = cond if exclude_filter is None else (exclude_filter | cond)
+
+    formations_only = formations_only.filter(~exclude_filter)
 
     normalized = formations_only.withColumn(
         "raw_filename",
@@ -117,16 +129,9 @@ def normalize_course_catalog(df, university, faculty):
 
     normalized = normalized.withColumn(
         "course_name",
-        regexp_extract(col("raw_filename"), r"(?:Fili[eè]re[s]?_?)(.*)", 1)
+        regexp_replace(regexp_replace(col("raw_filename"), r"[_-]+", " "), r"\d+$", "")
     )
-
-    # Si le nom de fichier ne matche pas l'expression régulière, on utilise display_name ou title
-    normalized = normalized.withColumn(
-        "course_name",
-        when((length(trim(col("course_name"))) > 0), col("course_name"))
-        .otherwise(when(col("display_name").isNotNull(), col("display_name"))
-        .otherwise(col("title")))
-    )
+    normalized = normalized.withColumn("course_name", trim(col("course_name")))
 
     normalized = normalized.select(
         "course_name",
@@ -136,15 +141,15 @@ def normalize_course_catalog(df, university, faculty):
     )
 
     normalized = normalized.withColumn("university", lit(university)) \
-                           .withColumn("faculty", lit(faculty)) \
-                           .withColumn("source_system", lit("file_extraction")) \
-                           .withColumn("record_id", md5(concat_ws("_", col("course_name"), col("text_content"), lit(faculty)))) \
-                           .withColumn("business_timestamp", current_timestamp()) \
-                           .withColumn("is_deleted", lit(False)) \
-                           .withColumn("language", lit("fr"))
+                            .withColumn("faculty", lit(faculty)) \
+                            .withColumn("source_system", lit("file_extraction")) \
+                            .withColumn("record_id", md5(concat_ws("_", col("raw_filename"), lit(faculty)))) \
+                            .withColumn("business_timestamp", current_timestamp()) \
+                            .withColumn("is_deleted", lit(False)) \
+                            .withColumn("language", lit("fr"))
 
     normalized = normalized.dropDuplicates(["record_id"])
-    normalized = normalized.filter(col("course_name").isNotNull())
+    normalized = normalized.filter(col("course_name").isNotNull() & (length(trim(col("course_name"))) > 0))
 
     return normalized
 
@@ -160,8 +165,14 @@ def write_to_hudi(df, table_name, table_path):
         "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
         "hoodie.upsert.shuffle.parallelism": "2",
         "hoodie.insert.shuffle.parallelism": "2",
-        # --- Désactivation temporaire de la synchro Hive pour éviter l'erreur de connexion ---
-        "hoodie.datasource.hive_sync.enable": "false",
+        "hoodie.datasource.hive_sync.enable": "true",
+        "hoodie.datasource.hive_sync.mode": "hms",
+        "hoodie.datasource.hive_sync.metastore.uris": HIVE_METASTORE_URI,
+        "hoodie.datasource.hive_sync.database": HIVE_DATABASE,
+        "hoodie.datasource.hive_sync.table": table_name,
+        "hoodie.datasource.hive_sync.partition_fields": "university,faculty",
+        "hoodie.datasource.hive_sync.partition_extractor_class":
+            "org.apache.hudi.hive.MultiPartKeysValueExtractor",
     }
 
     df.write.format("hudi") \
@@ -170,7 +181,7 @@ def write_to_hudi(df, table_name, table_path):
         .save(table_path)
 
 
-def run_build_courses(university="hassan_ii", faculty="FST"):
+def run_build_courses(university="hassan2", faculty="FSAC"):
     logger.info(f"🚀 Build course_catalog : {faculty} — {university}")
 
     spark = get_spark_session()
@@ -182,15 +193,15 @@ def run_build_courses(university="hassan_ii", faculty="FST"):
         logger.info(f"📥 {count_raw} documents bruts lus depuis raw-json")
 
         if count_raw == 0:
-            logger.warning("⚠️ Aucune donnée trouvée, arrêt.")
+            logger.warning("⚠️ Aucune donnée trouvée, arrêt. Vérifie COURSE_SUBPATH en haut du fichier.")
             return
 
         df_clean = normalize_course_catalog(df_raw, resolved_university, faculty)
         count_clean = df_clean.count()
-        logger.info(f"✨ {count_clean} cours/filières traités et prêts pour Hudi")
+        logger.info(f"✨ {count_clean} cours/filières trouvés après filtrage")
 
         if count_clean == 0:
-            logger.warning("⚠️ Aucun cours trouvé après nettoyage.")
+            logger.warning("⚠️ Aucun cours trouvé après filtrage. Vérifie les mots-clés COURSE_KEYWORDS.")
             return
 
         write_to_hudi(df_clean, HUDI_TABLE_NAME, HUDI_TABLE_PATH)
@@ -203,4 +214,4 @@ def run_build_courses(university="hassan_ii", faculty="FST"):
 
 
 if __name__ == "__main__":
-    run_build_courses(university="cadi_ayyad", faculty="fmpm")
+    run_build_courses(university="Cadi Ayyad", faculty="FSTG")
