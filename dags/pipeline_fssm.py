@@ -2,46 +2,64 @@
 # Membre 4 - Hafsa Masrour
 # Faculté des Sciences Semlalia - Marrakech (FSSM)
 
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
 import sys
 import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scraper.university_scraper import scrape_university
-from ingestion.ingest_api import ingest_faculty
-from ingestion.ingest_file import run_file_ingestion
-import logging
+default_args = {
+    "owner"           : "hafsa",
+    "retries"         : 1,
+    "retry_delay"     : timedelta(minutes=5),
+    "start_date"      : datetime(2026, 1, 1),
+    "email_on_failure": False
+}
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def run_pipeline():
-    logger.info("=" * 50)
-    logger.info("PIPELINE FSSM - cadi_ayyad")
-    logger.info("=" * 50)
-
-    # Étape 1 - Scraping web
-    logger.info("Étape 1 : Scraping web...")
-    stats_web = scrape_university(
+def task_scraping():
+    from scraper.university_scraper import scrape_university
+    return scrape_university(
         start_url  = "https://www.uca.ma/fssm/fr",
         university = "cadi_ayyad",
         faculty    = "FSSM",
         max_depth  = 3
     )
-    logger.info(f"Scraping terminé : {stats_web}")
 
-    # Étape 2 - Ingestion API OpenAlex
-    logger.info("Étape 2 : Ingestion API OpenAlex...")
+def task_ingest_api():
+    from ingestion.ingest_api import ingest_faculty
     ingest_faculty("Cadi Ayyad", "FSSM")
 
-    # Étape 3 - Ingestion fichiers PDF
-    logger.info("Étape 3 : Ingestion fichiers PDF...")
-    stats_file = run_file_ingestion(
+def task_ingest_file():
+    from ingestion.ingest_file import run_file_ingestion
+    run_file_ingestion(
         university = "cadi_ayyad",
         faculty    = "FSSM"
     )
-    logger.info(f"Ingestion fichiers terminée : {stats_file}")
 
-    logger.info("Pipeline FSSM terminé !")
+with DAG(
+    dag_id            = "pipeline_fssm",
+    default_args      = default_args,
+    schedule_interval = "@daily",
+    catchup           = False,
+    description       = "Pipeline FSSM - Cadi Ayyad",
+    tags              = ["fssm", "cadi_ayyad"]
+) as dag:
 
-if __name__ == "__main__":
-    run_pipeline()
+    scraping = PythonOperator(
+        task_id         = "scraping_web",
+        python_callable = task_scraping
+    )
+
+    ingest_api = PythonOperator(
+        task_id         = "ingestion_api",
+        python_callable = task_ingest_api
+    )
+
+    ingest_file = PythonOperator(
+        task_id         = "ingestion_fichiers",
+        python_callable = task_ingest_file
+    )
+
+    scraping >> ingest_api >> ingest_file

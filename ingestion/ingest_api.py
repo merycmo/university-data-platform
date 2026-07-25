@@ -7,7 +7,7 @@ from io import BytesIO
 import hashlib
 import logging
 import schedule
-from .ingest_logs import info, error
+
 # ============================================
 # CONFIGURATION
 # ============================================
@@ -189,8 +189,6 @@ def save_json(data, filename):
 # FONCTION D'INGESTION
 # ============================================
 def ingest_faculty(university_name, faculty_name):
- try:
-    info(f"Début de l'ingestion OpenAlex - {faculty_name}", university_name, faculty_name, "ingest_api")
     print(f"\n{'='*70}")
     print(f"INGESTION PROGRAMMEE - {faculty_name} ({university_name})")
     print(f"{'='*70}\n")
@@ -208,16 +206,34 @@ def ingest_faculty(university_name, faculty_name):
     save_to_minio(enriched_pub, university_name, faculty_name, "publications")
 
     print(f"Termine -> {len(authors)} auteurs | {len(enriched_pub)} publications\n")
-    info(f"Ingestion terminée - {faculty_name}", university_name, faculty_name, "ingest_api")
- except Exception as e:
-        error(f"Erreur ingestion OpenAlex : {str(e)}", university_name, faculty_name, "ingest_api")
-        raise
+
 # ============================================
 # FONCTION PRINCIPALE AVEC SCHEDULER
 # ============================================
-def run_scheduled_ingestion(university,faculty):
+def run_scheduled_ingestion():
     # Exécution immédiate
-    ingest_faculty(university,faculty)
-   
+    ingest_faculty("Hassan II", "FSAC")
+    ingest_faculty("Hassan II", "FSBM")
+    ingest_faculty("Hassan II", "FST")
+    ingest_faculty("Cadi Ayyad", "FSJES")
+    ingest_faculty("Cadi Ayyad", "FSTG")
+    ingest_faculty("Cadi Ayyad", "FSSM")
 
+    # Planification horaire
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSAC"))
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FSBM"))
+    schedule.every().hour.do(lambda: ingest_faculty("Hassan II", "FST"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSJES"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSTG"))
+    schedule.every().hour.do(lambda: ingest_faculty("Cadi Ayyad", "FSSM"))
 
+    print("Lancement de la collecte horaire OpenAlex...")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# ============================================
+# EXECUTION
+# ============================================
+if __name__ == "__main__":
+    run_scheduled_ingestion()
