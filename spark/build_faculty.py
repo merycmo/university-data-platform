@@ -167,6 +167,6 @@ def run_build_faculty(university="hassan2", faculty="FSAC"):
 
 
 if __name__ == "__main__":
-    university = sys.argv[1] if len(sys.argv) > 1 else "hassan2"
-    faculty    = sys.argv[2] if len(sys.argv) > 2 else "FSAC"
+    university = sys.argv[1] if len(sys.argv) > 1 else "cadi_ayyad"
+    faculty    = sys.argv[2] if len(sys.argv) > 2 else "fmpm"
     run_build_faculty(university=university, faculty=faculty)
