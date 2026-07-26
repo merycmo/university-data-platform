@@ -38,22 +38,27 @@ def task_ingest_file():
 
 def task_build_faculty():
     import subprocess
-    subprocess.run([
+    result = subprocess.run([
+        "docker", "exec", "university_spark_master",
         "/opt/spark/bin/spark-submit",
         "--master", "spark://spark-master:7077",
+        "--conf", "spark.jars.ivy=/tmp/ivy2",
         "--packages", "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262",
         "/opt/spark-apps/build_faculty.py", "cadi_ayyad", "FSSM"
     ], check=True)
+    return result
 
 def task_build_courses():
     import subprocess
-    subprocess.run([
+    result = subprocess.run([
+        "docker", "exec", "university_spark_master",
         "/opt/spark/bin/spark-submit",
         "--master", "spark://spark-master:7077",
+        "--conf", "spark.jars.ivy=/tmp/ivy2",
         "--packages", "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262",
         "/opt/spark-apps/build_courses.py", "cadi_ayyad", "FSSM"
     ], check=True)
-
+    return result
 def task_index_elasticsearch():
     from elasticsearch import Elasticsearch
     from minio import Minio
