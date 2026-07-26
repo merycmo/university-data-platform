@@ -11,7 +11,7 @@ import pdfplumber
 from docx import Document
 from minio import Minio
 
-MINIO_HOST     = "localhost:9000"
+MINIO_HOST     = "minio:9000"
 MINIO_USER     = "admin"
 MINIO_PASSWORD = "password123"
 
