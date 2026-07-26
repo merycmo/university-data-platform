@@ -85,6 +85,8 @@ services:
   postgres:
     image: postgres:13
     container_name: university_postgres
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_DB: metastore
       POSTGRES_USER: hive

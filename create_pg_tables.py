@@ -1,16 +1,15 @@
-import psycopg2
+import pg8000
 import json
 from minio import Minio
 
-conn = psycopg2.connect(
+conn = pg8000.connect(
     host="localhost",
-    port=5432,
+    port=5433,
     database="metastore",
     user="hive",
     password="hive123"
 )
 cur = conn.cursor()
-
 # Table faculty_profiles
 cur.execute("""
     DROP TABLE IF EXISTS faculty_profiles;
